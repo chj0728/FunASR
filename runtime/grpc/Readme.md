@@ -38,7 +38,7 @@ cd /cfs/user/burkliu/work2023/FunASR/funasr/runtime/grpc
 ```
 
 ### 4. Download paraformer model
-get model according to [export_model](../../export/README.md)
+get model according to [export_model](../docs/benchmark_onnx_cpp.md)
 
 or run code below as default
 ```shell
@@ -91,5 +91,5 @@ Install the requirements as in [grpc-python](../python/grpc/Readme.md)
 
 
 ## Acknowledge
-1. This project is maintained by [FunASR community](https://github.com/alibaba-damo-academy/FunASR).
+1. This project is maintained by [FunASR community](https://github.com/modelscope/FunASR).
 2. We acknowledge burkliu (刘柏基, liubaiji@xverse.cn) for contributing the grpc service.

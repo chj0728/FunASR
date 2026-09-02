@@ -1,0 +1,1708 @@
+#!/usr/bin/env python3
+"""Fun-ASR-Nano Streaming WebSocket Server.
+
+Features:
+- Streaming VAD segmentation (fsmn-vad)
+- Client-driven utterance endpoints (COMMIT, without server VAD)
+- Per-segment ASR decoding (Fun-ASR-Nano via vLLM)
+- Speaker diarization (eres2netv2 + ClusterBackend)
+- Hotword customization
+- Hallucination detection & prevention
+"""
+
+import asyncio
+from collections import deque
+import copy
+from difflib import SequenceMatcher
+import json
+import logging
+import os
+import queue
+import threading
+import time
+import argparse
+import numpy as np
+import torch
+import warnings
+import regex
+import websockets
+from websockets.exceptions import ConnectionClosed
+
+from funasr.utils.postprocess_hotwords import (
+    apply_postprocess_hotwords_to_results,
+    parse_postprocess_hotwords,
+)
+
+warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+
+class _BatchRequest:
+    def __init__(self, inputs, kwargs):
+        self.inputs = inputs
+        self.kwargs = kwargs
+        self.enqueued_at = time.monotonic()
+        self.event = threading.Event()
+        self.result = None
+        self.error = None
+
+
+class ThreadSafeGenerateModel:
+    """Protect mutable AutoModel runtime configuration across session threads."""
+
+    def __init__(self, model):
+        self.model = model
+        self.lock = threading.Lock()
+
+    def generate(self, *args, **kwargs):
+        with self.lock:
+            return self.model.generate(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+
+class RealtimeBatchingEngine:
+    """Serialize the shared engine while batching compatible session requests."""
+
+    def __init__(
+        self, engine, batch_wait_ms=10.0, max_batch_size=16, log_profile=False
+    ):
+        self.engine = engine
+        self._engine = getattr(engine, "_engine", engine)
+        self.batch_wait_s = max(0.0, float(batch_wait_ms)) / 1000.0
+        self.max_batch_size = max(1, int(max_batch_size))
+        self.log_profile = bool(log_profile)
+        self.requests = queue.Queue()
+        self.pending_request = None
+        self.worker = threading.Thread(
+            target=self._run, name="funasr-realtime-batcher", daemon=True
+        )
+        self.worker.start()
+
+    @staticmethod
+    def _freeze(value):
+        if isinstance(value, dict):
+            return (
+                "dict",
+                tuple(
+                    (key, RealtimeBatchingEngine._freeze(item))
+                    for key, item in sorted(value.items())
+                ),
+            )
+        if isinstance(value, list):
+            return (
+                "list",
+                tuple(RealtimeBatchingEngine._freeze(item) for item in value),
+            )
+        if isinstance(value, tuple):
+            return (
+                "tuple",
+                tuple(RealtimeBatchingEngine._freeze(item) for item in value),
+            )
+        if isinstance(value, set):
+            return (
+                "set",
+                frozenset(RealtimeBatchingEngine._freeze(item) for item in value),
+            )
+        try:
+            hash(value)
+        except TypeError:
+            return ("identity", id(value))
+        return ("value", type(value), value)
+
+    def generate(self, inputs, **kwargs):
+        request_inputs = list(inputs) if isinstance(inputs, (list, tuple)) else [inputs]
+        if not request_inputs:
+            return []
+        if len(request_inputs) > self.max_batch_size:
+            raise ValueError(
+                f"Realtime decode request has {len(request_inputs)} inputs; "
+                f"the configured maximum is {self.max_batch_size}"
+            )
+        if not self.worker.is_alive():
+            raise RuntimeError("Realtime decode batch worker is not running")
+
+        request = _BatchRequest(request_inputs, dict(kwargs))
+        self.requests.put(request)
+        while not request.event.wait(timeout=1.0):
+            if not self.worker.is_alive():
+                raise RuntimeError("Realtime decode batch worker stopped unexpectedly")
+        if request.error is not None:
+            raise request.error
+        return request.result
+
+    def _collect_batch(self, first):
+        batch = [first]
+        sample_count = len(first.inputs)
+        deadline = time.monotonic() + self.batch_wait_s
+        while sample_count < self.max_batch_size:
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                break
+            try:
+                request = self.requests.get(timeout=timeout)
+            except queue.Empty:
+                break
+            if sample_count + len(request.inputs) > self.max_batch_size:
+                self.pending_request = request
+                break
+            batch.append(request)
+            sample_count += len(request.inputs)
+        return batch
+
+    def _run(self):
+        while True:
+            first = self.pending_request
+            if first is None:
+                first = self.requests.get()
+            else:
+                self.pending_request = None
+            requests = [first]
+            try:
+                requests = self._collect_batch(first)
+            except Exception as error:
+                logger.exception("Realtime batch collection failed")
+                for request in requests:
+                    request.error = error
+                    request.event.set()
+                continue
+
+            groups = {}
+            for request in requests:
+                try:
+                    key = self._freeze(request.kwargs)
+                except Exception as error:
+                    request.error = error
+                    request.event.set()
+                    continue
+                groups.setdefault(key, []).append(request)
+            for group in groups.values():
+                try:
+                    self._generate_group(group)
+                except Exception as error:
+                    logger.exception("Realtime batch result distribution failed")
+                    for request in group:
+                        if request.event.is_set():
+                            continue
+                        request.error = error
+                        request.event.set()
+
+    def _generate_group(self, requests):
+        inputs = [item for request in requests for item in request.inputs]
+        started_at = time.monotonic()
+        try:
+            results = self.engine.generate(inputs, **requests[0].kwargs)
+            if len(results) != len(inputs):
+                raise RuntimeError(
+                    "Realtime batch result count does not match the input count: "
+                    f"{len(results)} != {len(inputs)}"
+                )
+        except Exception as error:
+            if len(requests) > 1 and not isinstance(
+                error, torch.cuda.OutOfMemoryError
+            ):
+                logger.warning(
+                    "Realtime decode batch failed; retrying %d requests separately: %s",
+                    len(requests),
+                    error,
+                )
+                for request in requests:
+                    self._generate_group([request])
+                return
+            for request in requests:
+                request.error = error
+            for request in requests:
+                request.event.set()
+            return
+
+        if self.log_profile:
+            queue_waits_ms = sorted(
+                (started_at - request.enqueued_at) * 1000 for request in requests
+            )
+            midpoint = len(queue_waits_ms) // 2
+            if len(queue_waits_ms) % 2:
+                queue_p50_ms = queue_waits_ms[midpoint]
+            else:
+                queue_p50_ms = (
+                    queue_waits_ms[midpoint - 1] + queue_waits_ms[midpoint]
+                ) / 2
+            audio_seconds = [
+                item.shape[-1] / 16000.0
+                for item in inputs
+                if isinstance(item, (np.ndarray, torch.Tensor)) and item.ndim > 0
+            ]
+            logger.info(
+                "Realtime decode profile: requests=%d samples=%d "
+                "audio_sec_total=%.3f audio_sec_min=%.3f audio_sec_max=%.3f "
+                "queue_ms_p50=%.3f queue_ms_max=%.3f engine_ms=%.3f",
+                len(requests),
+                len(inputs),
+                sum(audio_seconds),
+                min(audio_seconds, default=0.0),
+                max(audio_seconds, default=0.0),
+                queue_p50_ms,
+                queue_waits_ms[-1],
+                (time.monotonic() - started_at) * 1000,
+            )
+
+        offset = 0
+        for request in requests:
+            end = offset + len(request.inputs)
+            request.result = []
+            for local_index, (item, result) in enumerate(
+                zip(request.inputs, results[offset:end])
+            ):
+                result_key = result.get("key") if isinstance(result, dict) else None
+                if (
+                    not isinstance(item, str)
+                    and isinstance(result_key, str)
+                    and result_key.startswith("sample_")
+                ):
+                    result = dict(result)
+                    result["key"] = f"sample_{local_index}"
+                request.result.append(result)
+            offset = end
+            request.event.set()
+
+
+def _normalize_transcript_with_positions(text):
+    normalized = []
+    source_positions = []
+    for index, char in enumerate(text):
+        if regex.fullmatch(r"[\p{P}\p{S}\s]", char):
+            continue
+        folded = char.casefold()
+        normalized.extend(folded)
+        source_positions.extend([index] * len(folded))
+    return "".join(normalized), source_positions
+
+
+def _normalize_transcript(text):
+    return _normalize_transcript_with_positions(text)[0]
+
+
+def _is_supported_transcript_extension(candidate, reference):
+    candidate, hallucinated = detect_and_fix_hallucination(candidate)
+    if hallucinated:
+        return False
+    candidate_cmp = _normalize_transcript(candidate)
+    reference_cmp = _normalize_transcript(reference)
+    if len(candidate_cmp) - len(reference_cmp) < 4:
+        return False
+    common_prefix_len = 0
+    for candidate_char, reference_char in zip(candidate_cmp, reference_cmp):
+        if candidate_char != reference_char:
+            break
+        common_prefix_len += 1
+    return common_prefix_len >= max(8, (len(reference_cmp) * 3) // 4)
+
+
+def _merge_overlapping_transcripts(existing, incoming):
+    """Join adjacent rolling-window transcripts when their text overlap is clear."""
+    existing_norm, existing_positions = _normalize_transcript_with_positions(existing)
+    incoming_norm, incoming_positions = _normalize_transcript_with_positions(incoming)
+    if not existing_norm or not incoming_norm:
+        return None
+
+    minimum_overlap = max(4, min(len(existing_norm), len(incoming_norm)) // 4)
+    for overlap in range(min(len(existing_norm), len(incoming_norm)), minimum_overlap - 1, -1):
+        if existing_norm[-overlap:] != incoming_norm[:overlap]:
+            continue
+        existing_start = len(existing_norm) - overlap
+        if (
+            existing_start > 0
+            and existing_positions[existing_start - 1] == existing_positions[existing_start]
+        ):
+            continue
+        if (
+            overlap < len(incoming_positions)
+            and incoming_positions[overlap - 1] == incoming_positions[overlap]
+        ):
+            continue
+        suffix_start = incoming_positions[overlap - 1] + 1
+        while (
+            suffix_start < len(incoming)
+            and regex.fullmatch(r"[\p{P}\p{S}]", incoming[suffix_start])
+            and existing.endswith(incoming[suffix_start])
+        ):
+            suffix_start += 1
+        return existing + incoming[suffix_start:]
+    return None
+
+
+def detect_and_fix_hallucination(text, max_ngram_length=12, max_occurrences=3):
+    """Detect repeated patterns (hallucination) and truncate to keep one occurrence."""
+    if not text or len(text) < max_ngram_length * 2:
+        return text, False
+
+    source_positions = []
+    cleaned_chars = []
+    for index, char in enumerate(text):
+        if regex.fullmatch(r'\p{P}', char):
+            continue
+        cleaned_chars.append(char)
+        source_positions.append(index)
+    cleaned = ''.join(cleaned_chars)
+
+    def truncate_after_first(match):
+        def ascii_quote_count(quote, end):
+            count = 0
+            for index in range(end):
+                if text[index] != quote:
+                    continue
+                if (
+                    quote == "'"
+                    and index > 0
+                    and index + 1 < len(text)
+                    and text[index - 1].isalnum()
+                    and text[index + 1].isalnum()
+                ):
+                    continue
+                count += 1
+            return count
+
+        cleaned_end = match.start(1) + len(match.group(1))
+        source_end = source_positions[cleaned_end - 1] + 1
+        while source_end < len(text) and regex.fullmatch(
+            r'[\p{Pe}\p{Pf}\p{Po}\p{Pd}\p{Pc}]', text[source_end]
+        ):
+            if (
+                text[source_end] in {'"', "'"}
+                and ascii_quote_count(text[source_end], source_end) % 2 == 0
+            ):
+                break
+            source_end += 1
+        return text[:source_end].rstrip(), True
+
+    word_pattern = rf'(?<!\S)(?!\d+$)(\w+)(?:\s+\1){{{max_occurrences - 1},}}(?!\S)'
+    match = regex.search(word_pattern, cleaned, regex.IGNORECASE)
+    if match:
+        return truncate_after_first(match)
+
+    for length in range(1, max_ngram_length):
+        pattern = rf'(?<!\d)(\S{{{length}}})\1{{{max_occurrences - 1},}}(?!\d)'
+        combined = rf'(?=.*\D){pattern}'
+        match = regex.search(combined, cleaned)
+        if match:
+            return truncate_after_first(match)
+
+    return text, False
+
+
+def _clean_asr_text(text):
+    """Remove timestamp tags and artifacts from vLLM output."""
+    import re
+    text = re.sub(r'<[^>]*>', '', text)
+    text = re.sub(r'\[.*?\]', '', text)
+    text = re.sub(r'[Ｏ\[\]&＆|｜]', '', text)
+    text = re.sub(r'/sil|endofbreak|FFFF', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def _postprocess_result_text(text, asr_kwargs):
+    if not text:
+        return text
+    cfg = {
+        key: asr_kwargs[key]
+        for key in (
+            "postprocess_hotwords",
+            "postprocess_hotword_file",
+            "postprocess_hotword_threshold",
+            "postprocess_hotword_fuzzy",
+            "return_postprocess_hotword_matches",
+        )
+        if key in asr_kwargs
+    }
+    if not cfg:
+        return text
+    results = apply_postprocess_hotwords_to_results([{"text": text}], cfg)
+    return results[0].get("text", text)
+
+
+def _parse_postprocess_hotwords_command(payload):
+    explicit, fuzzy_targets = parse_postprocess_hotwords(
+        payload.replace(",", "\n")
+    )
+    if fuzzy_targets:
+        for target in fuzzy_targets:
+            explicit[target] = target
+    return explicit
+
+
+from funasr.models.fsmn_vad_streaming.dynamic_vad import DynamicStreamingVAD
+
+
+class ClientEndpointVAD:
+    """Track an utterance start without loading or running a VAD model."""
+
+    def __init__(self):
+        self.current_speech_start = None
+
+    def start_utterance(self, start_ms):
+        if self.current_speech_start is None:
+            self.current_speech_start = start_ms
+
+    def reset(self):
+        self.current_speech_start = None
+
+
+class HybridSpeakerTracker:
+    """Speaker diarization: streaming ClusterBackend + final re-clustering."""
+
+    def __init__(
+        self,
+        spk_model,
+        device,
+        threshold=0.6,
+        max_history_chunks=128,
+        max_speakers=15,
+    ):
+        if max_history_chunks <= 0:
+            raise ValueError("max_history_chunks must be positive")
+        if max_speakers <= 0:
+            raise ValueError("max_speakers must be positive")
+        self.spk_model = spk_model
+        self.device = device
+        self.threshold = threshold
+        self.max_speakers = max_speakers
+        self.speaker_centers = []
+        self.speaker_center_updates = []
+        from funasr.models.campplus.utils import sv_chunk, postprocess, distribute_spk
+        from funasr.models.campplus.cluster_backend import ClusterBackend
+        self.sv_chunk = sv_chunk
+        self.postprocess = postprocess
+        self.distribute_spk = distribute_spk
+        self.cluster_backend = ClusterBackend(merge_thr=0.78).to(device)
+        self.all_chunks = deque(maxlen=max_history_chunks)
+        self.all_embeddings = deque(maxlen=max_history_chunks)
+        self.last_speaker_id = 0
+
+    @torch.no_grad()
+    def assign_streaming(self, audio_samples, seg_start_s, seg_end_s, sentence):
+        """Assign speaker ID during streaming using ClusterBackend."""
+        vad_seg = [[seg_start_s, seg_end_s, audio_samples]]
+        chunks = self.sv_chunk(vad_seg)
+        if not chunks:
+            sentence["spk"] = self.last_speaker_id
+            return
+
+        speech_list = [ch[2] for ch in chunks]
+        spk_res = self.spk_model.generate(input=speech_list, cache={}, is_final=True)
+        embeddings = torch.cat([r["spk_embedding"] for r in spk_res], dim=0).detach().cpu()
+        for chunk, embedding in zip(chunks, embeddings):
+            # Speaker post-processing only needs timestamps after embedding extraction.
+            # Do not retain NumPy views into the session audio buffer.
+            self.all_chunks.append((float(chunk[0]), float(chunk[1])))
+            self.all_embeddings.append(embedding.clone())
+
+        sv_output = self._cluster_recent(update_centers=True)
+        temp = [{"start": int(seg_start_s*1000), "end": int(seg_end_s*1000), "text": sentence["text"]}]
+        self.distribute_spk(temp, sv_output)
+        sentence["spk"] = temp[0].get("spk", self.last_speaker_id)
+        self.last_speaker_id = sentence["spk"]
+
+    def _cluster_recent(self, update_centers):
+        all_embeddings = torch.stack(list(self.all_embeddings), dim=0)
+        labels = self.cluster_backend(all_embeddings, oracle_num=None)
+        if not isinstance(labels, np.ndarray):
+            labels = np.asarray(labels)
+
+        chunks = [[start, end, None] for start, end in self.all_chunks]
+        sv_output, cluster_centers = self.postprocess(
+            chunks,
+            None,
+            labels,
+            all_embeddings,
+            return_spk_center=True,
+        )
+        stable_ids = self._map_cluster_centers(cluster_centers, update=update_centers)
+        return [[start, end, stable_ids[int(spk)]] for start, end, spk in sv_output]
+
+    def _map_cluster_centers(self, cluster_centers, update):
+        centers = torch.as_tensor(cluster_centers, dtype=torch.float32).cpu()
+        centers = torch.nn.functional.normalize(centers, dim=1)
+        stable_ids = []
+        used_ids = set()
+
+        for center in centers:
+            best_id = None
+            best_similarity = float("-inf")
+            created = False
+            if self.speaker_centers:
+                similarities = torch.stack(
+                    [torch.dot(center, known_center) for known_center in self.speaker_centers]
+                )
+                for candidate in torch.argsort(similarities, descending=True).tolist():
+                    if candidate not in used_ids:
+                        best_id = candidate
+                        best_similarity = float(similarities[candidate])
+                        break
+
+            matched = best_id is not None and best_similarity >= self.threshold
+            if not matched and update and len(self.speaker_centers) < self.max_speakers:
+                best_id = len(self.speaker_centers)
+                self.speaker_centers.append(center.clone())
+                self.speaker_center_updates.append(1)
+                matched = True
+                created = True
+            elif best_id is None:
+                # There can be more active clusters than the configured identity cap.
+                if not self.speaker_centers:
+                    best_id = 0
+                else:
+                    similarities = torch.stack(
+                        [torch.dot(center, known_center) for known_center in self.speaker_centers]
+                    )
+                    best_id = int(torch.argmax(similarities))
+
+            if update and matched and not created:
+                count = self.speaker_center_updates[best_id]
+                weight = 1.0 / min(count + 1, 20)
+                updated = (1.0 - weight) * self.speaker_centers[best_id] + weight * center
+                self.speaker_centers[best_id] = torch.nn.functional.normalize(updated, dim=0)
+                self.speaker_center_updates[best_id] = count + 1
+
+            stable_ids.append(best_id)
+            used_ids.add(best_id)
+
+        return stable_ids
+
+    @torch.no_grad()
+    def finalize(self, sentences, min_split_s=3.0):
+        """Final re-clustering for accurate speaker assignment."""
+        if not self.all_embeddings or not sentences:
+            return sentences
+
+        sv_output = self._cluster_recent(update_centers=False)
+        history_start_ms = int(min(start for start, _ in self.all_chunks) * 1000)
+        final_sentences = []
+        for s in sentences:
+            if s["end"] <= history_start_ms:
+                final_sentences.append(s)
+                continue
+            current = dict(s)
+            if s["start"] < history_start_ms:
+                duration_ms = s["end"] - s["start"]
+                boundary_ratio = (history_start_ms - s["start"]) / duration_ms
+                split_index = min(
+                    len(s["text"]) - 1,
+                    max(1, round(len(s["text"]) * boundary_ratio)),
+                )
+                prefix_text = s["text"][:split_index].strip()
+                suffix_text = s["text"][split_index:].strip()
+                if not prefix_text or not suffix_text:
+                    final_sentences.append(s)
+                    continue
+
+                prefix = dict(s)
+                prefix.update(text=prefix_text, end=history_start_ms)
+                final_sentences.append(prefix)
+                current.update(
+                    text=suffix_text,
+                    start=history_start_ms,
+                )
+            self.distribute_spk([current], sv_output)
+            final_sentences.extend(self._try_split(current, sv_output, {}, min_split_s))
+
+        return final_sentences
+
+    def _try_split(self, sentence, sv_output, id_map, min_split_s):
+        """Split a sentence if multiple speakers detected within its time range."""
+        sent_start = sentence["start"] / 1000.0
+        sent_end = sentence["end"] / 1000.0
+        text = sentence["text"]
+
+        overlapping = []
+        for sv_start, sv_end, sv_spk in sv_output:
+            o_start = max(sent_start, sv_start)
+            o_end = min(sent_end, sv_end)
+            if o_end > o_start:
+                mapped_spk = id_map.get(int(sv_spk), int(sv_spk))
+                overlapping.append([o_start, o_end, mapped_spk])
+
+        if len(overlapping) <= 1:
+            return [sentence]
+
+        filtered = [overlapping[0]]
+        for i in range(1, len(overlapping)):
+            cur = overlapping[i]
+            prev = filtered[-1]
+            if cur[2] == prev[2]:
+                filtered[-1] = [prev[0], cur[1], prev[2]]
+            elif (cur[1] - cur[0]) < min_split_s:
+                filtered[-1] = [prev[0], cur[1], prev[2]]
+            else:
+                filtered.append(cur)
+
+        merged = [filtered[0]]
+        for i in range(1, len(filtered)):
+            if (merged[-1][1] - merged[-1][0]) < min_split_s:
+                merged[-1] = [merged[-1][0], filtered[i][1], filtered[i][2]]
+            else:
+                merged.append(filtered[i])
+        if len(merged) > 1 and (merged[-1][1] - merged[-1][0]) < min_split_s:
+            merged[-2] = [merged[-2][0], merged[-1][1], merged[-2][2]]
+            merged.pop()
+
+        if len(merged) <= 1:
+            return [sentence]
+
+        total_dur = sum(m[1] - m[0] for m in merged)
+        sub_sentences = []
+        char_pos = 0
+        for i, (m_start, m_end, m_spk) in enumerate(merged):
+            if i == len(merged) - 1:
+                sub_text = text[char_pos:]
+            else:
+                n_chars = max(1, int(len(text) * (m_end - m_start) / total_dur))
+                sub_text = text[char_pos:char_pos + n_chars]
+                char_pos += n_chars
+            if sub_text.strip():
+                sub_sentences.append({"text": sub_text.strip(), "start": int(m_start*1000), "end": int(m_end*1000), "spk": m_spk})
+
+        return sub_sentences if sub_sentences else [sentence]
+
+    def reset(self):
+        self.speaker_centers = []
+        self.speaker_center_updates = []
+        self.all_chunks.clear()
+        self.all_embeddings.clear()
+        self.last_speaker_id = 0
+
+    def session_stats(self):
+        return {
+            "speaker_history_chunks": len(self.all_chunks),
+            "speaker_history_embeddings": len(self.all_embeddings),
+            "speaker_history_limit": self.all_chunks.maxlen,
+            "speaker_centers": len(self.speaker_centers),
+            "speaker_center_limit": self.max_speakers,
+            "last_speaker_id": self.last_speaker_id,
+        }
+
+
+class RealtimeASRSession:
+    """Manages a single streaming ASR session."""
+
+    def __init__(
+        self,
+        vllm_engine,
+        asr_kwargs,
+        vad,
+        spk_tracker=None,
+        sample_rate=16000,
+        chunk_ms=960,
+        partial_window_sec=15.0,
+        audio_lookback_sec=5.0,
+        endpoint_mode="server",
+    ):
+        if endpoint_mode not in {"server", "client"}:
+            raise ValueError(f"Unsupported endpoint mode: {endpoint_mode}")
+        self.vllm_engine = vllm_engine
+        self.asr_kwargs = asr_kwargs
+        self.vad = vad
+        self.endpoint_mode = endpoint_mode
+        self.sample_rate = sample_rate
+        self.chunk_samples = int(sample_rate * chunk_ms / 1000)
+        self.first_chunk_samples = int(sample_rate * 480 / 1000)
+        # Bound the interim (partial) re-decode window. While a speech segment has
+        # not yet hit a VAD pause it keeps growing, and the partial path re-encodes
+        # it from the start on every chunk -> O(L^2) total re-encoding for a
+        # length-L segment. Under concurrency that saturates the GPU and long-segment
+        # requests time out. Capping the partial window to the most recent
+        # `partial_window_sec` seconds makes interim re-decoding ~O(L) per segment
+        # without changing the final result (completed segments are always decoded
+        # in full by _decode_segment / the is_final path). Set <=0 to disable.
+        self.partial_window_samples = int(sample_rate * partial_window_sec) if partial_window_sec and partial_window_sec > 0 else 0
+        self.audio_lookback_samples = max(0, int(sample_rate * audio_lookback_sec))
+        self.first_decode_done = False
+
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.audio_buffer_start_sample = 0
+        self.total_samples = 0
+        self.prev_text = ""
+        self.last_partial_text = ""
+        self.last_partial_start_ms = 0
+        self.last_partial_end_ms = 0
+        self.last_partial_eligible = False
+        self.segment_partial_text = ""
+        self.segment_partial_start_ms = 0
+        self.segment_partial_end_ms = 0
+        self.segment_partial_stable_count = 0
+        self.segment_partial_observation_count = 0
+        self.segment_best_partial_text = ""
+        self.segment_best_partial_start_ms = 0
+        self.segment_best_partial_end_ms = 0
+        self.segment_best_partial_observation_count = 0
+        self.last_decode_samples = 0
+        self.locked_sentences = []
+        self.prev_seg_text = ""
+        self.spk_tracker = spk_tracker
+        self.use_context = True
+        self.is_active = False
+
+    def add_audio(self, pcm_bytes):
+        audio_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+        audio_float = audio_int16.astype(np.float32) / 32768.0
+        chunk_start_sample = self.total_samples
+        self.audio_buffer = np.concatenate([self.audio_buffer, audio_float])
+        self.total_samples += len(audio_float)
+
+        if len(audio_float) > 0:
+            if self.endpoint_mode == "client":
+                start_ms = int(chunk_start_sample * 1000 / self.sample_rate)
+                self.vad.start_utterance(start_ms)
+                new_confirmed = []
+            else:
+                new_confirmed = self.vad.feed(
+                    torch.from_numpy(audio_float).float(), is_final=False
+                )
+
+            for seg in new_confirmed:
+                seg_text = self._decode_segment(seg)
+                self.prev_text = ""
+                self._append_completed_segment(seg, seg_text)
+                if seg_text.strip():
+                    logger.info(f"Locked: [{seg[0]}-{seg[1]}ms] \"{seg_text[:40]}\"")
+
+        self._compact_audio_buffer()
+
+    def _slice_audio(self, start_sample, end_sample):
+        local_start = max(0, start_sample - self.audio_buffer_start_sample)
+        local_end = min(len(self.audio_buffer), end_sample - self.audio_buffer_start_sample)
+        if local_end <= local_start:
+            return np.array([], dtype=np.float32)
+        return self.audio_buffer[local_start:local_end]
+
+    def _compact_audio_buffer(self):
+        if self.vad.current_speech_start is not None:
+            keep_from = int(self.vad.current_speech_start * self.sample_rate / 1000)
+        else:
+            keep_from = self.total_samples - self.audio_lookback_samples
+        keep_from = min(self.total_samples, max(self.audio_buffer_start_sample, keep_from))
+        drop_samples = keep_from - self.audio_buffer_start_sample
+        if drop_samples > 0:
+            # A copy is required here; a slice would keep the discarded backing
+            # array alive and recreate the long-session memory leak.
+            self.audio_buffer = self.audio_buffer[drop_samples:].copy()
+            self.audio_buffer_start_sample = keep_from
+
+    def _release_audio_buffer(self):
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.audio_buffer_start_sample = self.total_samples
+
+    def _reset_partial_history(self, preserve_best=False):
+        self.segment_partial_text = ""
+        self.segment_partial_start_ms = 0
+        self.segment_partial_end_ms = 0
+        self.segment_partial_stable_count = 0
+        self.segment_partial_observation_count = 0
+        if not preserve_best:
+            self.segment_best_partial_text = ""
+            self.segment_best_partial_start_ms = 0
+            self.segment_best_partial_end_ms = 0
+            self.segment_best_partial_observation_count = 0
+
+    def _record_partial_text(self, text, start_ms, hallucinated=False):
+        """Build a confidence-bearing transcript across overlapping partial windows."""
+        end_ms = int(self.total_samples * 1000 / self.sample_rate)
+        self.last_partial_end_ms = end_ms
+        self.last_partial_eligible = bool(text.strip()) and not hallucinated
+        if not text.strip() or hallucinated:
+            self._reset_partial_history(preserve_best=hallucinated)
+            return
+
+        start_ms = int(start_ms)
+        incoming_norm = _normalize_transcript(text)
+        best_norm = _normalize_transcript(self.segment_best_partial_text)
+        if not self.segment_best_partial_text or start_ms != self.segment_best_partial_start_ms:
+            self.segment_best_partial_text = text
+            self.segment_best_partial_start_ms = start_ms
+            self.segment_best_partial_end_ms = end_ms
+            self.segment_best_partial_observation_count = 1
+        else:
+            self.segment_best_partial_observation_count += 1
+            if len(incoming_norm) > len(best_norm):
+                self.segment_best_partial_text = text
+                self.segment_best_partial_end_ms = end_ms
+        if not self.segment_partial_text:
+            self.segment_partial_text = text
+            self.segment_partial_start_ms = start_ms
+            self.segment_partial_end_ms = end_ms
+            self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
+            return
+
+        history_norm = _normalize_transcript(self.segment_partial_text)
+        if start_ms == self.segment_partial_start_ms:
+            self.segment_partial_observation_count += 1
+            if incoming_norm == history_norm:
+                self.segment_partial_text = text
+                self.segment_partial_end_ms = end_ms
+                self.segment_partial_stable_count += 1
+            else:
+                self.segment_partial_text = text
+                self.segment_partial_end_ms = end_ms
+                self.segment_partial_stable_count = 1
+            return
+
+        if start_ms < self.segment_partial_start_ms:
+            self.segment_partial_text = text
+            self.segment_partial_start_ms = start_ms
+            self.segment_partial_end_ms = end_ms
+            self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
+            return
+
+        if start_ms > self.segment_partial_end_ms:
+            self.segment_partial_text = text
+            self.segment_partial_start_ms = start_ms
+            self.segment_partial_end_ms = end_ms
+            self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
+            return
+
+        merged = _merge_overlapping_transcripts(self.segment_partial_text, text)
+        if merged is not None:
+            self.segment_partial_text = merged
+            self.segment_partial_end_ms = end_ms
+            self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count += 1
+        else:
+            self.segment_partial_text = text
+            self.segment_partial_start_ms = start_ms
+            self.segment_partial_end_ms = end_ms
+            self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
+
+    def should_decode(self):
+        threshold = self.first_chunk_samples if not self.first_decode_done else self.chunk_samples
+        return (self.total_samples - self.last_decode_samples) >= threshold
+
+    @torch.no_grad()
+    def decode(self, is_final=False):
+        if is_final and self.endpoint_mode == "client":
+            return self.commit()
+
+        if self.endpoint_mode == "server":
+            if is_final:
+                return self._finalize_server_session()
+            if self.total_samples < self.first_chunk_samples:
+                return self._build_response(is_final)
+
+        if self.endpoint_mode == "client":
+            if self.vad.current_speech_start is None:
+                return self._build_response(is_final=False)
+            utterance_start_sample = int(
+                self.vad.current_speech_start * self.sample_rate / 1000
+            )
+            if self.total_samples - utterance_start_sample < self.first_chunk_samples:
+                return self._build_response(is_final=False)
+
+        if self.vad.current_speech_start is not None:
+            seg_audio, partial_start_ms = self.get_partial_decode_audio()
+        else:
+            self.last_decode_samples = self.total_samples
+            self.last_partial_text = ""
+            self.last_partial_eligible = False
+            self._reset_partial_history()
+            return self._build_response(is_final)
+
+        if len(seg_audio) < self.chunk_samples // 2:
+            return self._build_response(is_final)
+
+        audio_tensor = torch.from_numpy(seg_audio).float()
+        try:
+            results = self.vllm_engine.generate(
+                inputs=[audio_tensor],
+                hotwords=self.asr_kwargs.get("hotwords"),
+                language=self.asr_kwargs.get("language"),
+                max_new_tokens=200,
+            )
+            text = results[0]["text"] if results else ""
+            text = _clean_asr_text(text)
+        except Exception as e:
+            logger.error(f"ASR error: {e}")
+            self.last_partial_eligible = False
+            self._reset_partial_history()
+            return self._build_response(is_final)
+
+        text, hallucinated = detect_and_fix_hallucination(text)
+        if hallucinated:
+            self.prev_text = ""
+
+        self.last_decode_samples = self.total_samples
+        self.last_partial_text = text
+        self.last_partial_start_ms = partial_start_ms
+        self._record_partial_text(text, partial_start_ms, hallucinated=hallucinated)
+        if text.strip() and not self.first_decode_done:
+            self.first_decode_done = True
+
+        tokenizer = self.vllm_engine._engine.tokenizer
+        encoded = tokenizer.encode(text)
+        if len(encoded) > 5:
+            self.prev_text = tokenizer.decode(encoded[:-5], skip_special_tokens=True)
+        else:
+            self.prev_text = ""
+
+        return self._build_response(is_final)
+
+    @torch.no_grad()
+    def commit(self):
+        """Finalize one client-delimited utterance while keeping the session open."""
+        if self.endpoint_mode != "client":
+            raise RuntimeError("COMMIT requires endpoint_mode='client'")
+
+        if self.vad.current_speech_start is not None:
+            end_ms = int(self.total_samples * 1000 / self.sample_rate)
+            seg = [self.vad.current_speech_start, end_ms]
+            seg_text = self._decode_segment(seg)
+            self._append_completed_segment(seg, seg_text)
+            self.vad.current_speech_start = None
+
+        self._finalize_speakers()
+
+        response = self._build_response(is_final=True)
+        self._reset_utterance_state()
+        return response
+
+    def _finalize_server_session(self):
+        duration_ms = int(self.total_samples * 1000 / self.sample_rate)
+        final_segments = []
+        finalize_vad = getattr(self.vad, "finalize", None)
+        if callable(finalize_vad):
+            try:
+                final_segments = finalize_vad() or []
+            except Exception as error:
+                logger.error(f"VAD finalization error: {error}")
+
+        had_valid_final_segment = False
+        for raw_seg in final_segments:
+            start_ms = max(0, int(raw_seg[0]))
+            end_ms = min(duration_ms, int(raw_seg[1]))
+            if end_ms <= start_ms:
+                continue
+            had_valid_final_segment = True
+            seg = [start_ms, end_ms]
+            seg_text = self._decode_segment(seg)
+            self._append_completed_segment(seg, seg_text)
+
+        if not had_valid_final_segment and self.vad.current_speech_start is not None:
+            seg = [int(self.vad.current_speech_start), duration_ms]
+            seg_text = self._decode_segment(seg)
+            self._append_completed_segment(seg, seg_text)
+
+        self.vad.current_speech_start = None
+        self._finalize_speakers()
+        self._release_audio_buffer()
+        return self._build_response(is_final=True)
+
+    def _reset_utterance_state(self):
+        self._release_audio_buffer()
+        self.first_decode_done = False
+        self.vad.reset()
+        self.prev_text = ""
+        self.last_partial_text = ""
+        self.last_partial_start_ms = 0
+        self.last_partial_end_ms = 0
+        self.last_partial_eligible = False
+        self._reset_partial_history()
+        self.last_decode_samples = self.total_samples
+        self.locked_sentences = []
+        self.prev_seg_text = ""
+
+    def get_partial_decode_audio(self):
+        """Return the bounded audio window used for unstable partial decoding."""
+        seg_start_sample = int(self.vad.current_speech_start * self.sample_rate / 1000)
+        decode_start_sample = seg_start_sample
+
+        if self.partial_window_samples:
+            min_start = self.total_samples - self.partial_window_samples
+            if min_start > decode_start_sample:
+                decode_start_sample = min_start
+
+        decode_start_sample = max(self.audio_buffer_start_sample, decode_start_sample)
+        start_ms = int(decode_start_sample * 1000 / self.sample_rate)
+        return self._slice_audio(decode_start_sample, self.total_samples), start_ms
+
+    def _partial_fallback_candidate(self, seg, require_stable, latest_only=False):
+        if latest_only:
+            if not self.last_partial_eligible:
+                return ""
+            text = self.last_partial_text.strip()
+            start_ms = self.last_partial_start_ms
+            end_ms = self.last_partial_end_ms
+        else:
+            if require_stable and self.segment_partial_stable_count < 2:
+                return ""
+            text = self.segment_partial_text
+            start_ms = self.segment_partial_start_ms
+            end_ms = self.segment_partial_end_ms
+
+        end_tolerance_ms = 100
+        if (
+            not text
+            or int(start_ms) != int(seg[0])
+            or abs(int(end_ms) - int(seg[1])) > end_tolerance_ms
+        ):
+            return ""
+        return text
+
+    def _reconcile_completed_segment_text(self, decoded_text, seg, decode_succeeded):
+        """Keep a proven segment partial only when the completed decode regresses."""
+        final_text, final_hallucinated = detect_and_fix_hallucination(decoded_text)
+        if not decode_succeeded:
+            partial_text = self._partial_fallback_candidate(
+                seg, require_stable=False, latest_only=True
+            )
+            partial_text, _ = detect_and_fix_hallucination(partial_text)
+            if partial_text:
+                logger.warning(
+                    "Completed segment [%d-%dms] decode failed; keeping the latest "
+                    "full-coverage partial (%d chars)",
+                    int(seg[0]), int(seg[1]), len(partial_text),
+                )
+                return partial_text
+            return final_text
+
+        if not final_text.strip():
+            return final_text
+
+        partial_text = self._partial_fallback_candidate(
+            seg, require_stable=not final_hallucinated
+        )
+        long_segment_reason = ""
+        if not partial_text:
+            segment_duration_ms = max(0, int(seg[1]) - int(seg[0]))
+            decode_chunk_ms = int(self.chunk_samples * 1000 / self.sample_rate)
+            recent_partial = self.last_partial_text.strip()
+            recent_start_ms = self.last_partial_start_ms
+            recent_end_ms = self.last_partial_end_ms
+            recent_observations = self.segment_partial_observation_count
+            recent_eligible = self.last_partial_eligible
+            if len(_normalize_transcript(self.segment_best_partial_text)) > len(
+                _normalize_transcript(recent_partial)
+            ):
+                recent_partial = self.segment_best_partial_text.strip()
+                recent_start_ms = self.segment_best_partial_start_ms
+                recent_end_ms = self.segment_best_partial_end_ms
+                recent_observations = self.segment_best_partial_observation_count
+                recent_eligible = True
+            tail_gap_ms = int(seg[1]) - int(recent_end_ms)
+            recent_partial, recent_hallucinated = detect_and_fix_hallucination(
+                recent_partial
+            )
+            if (
+                segment_duration_ms >= 8000
+                and recent_eligible
+                and recent_observations >= 2
+                and int(recent_start_ms) == int(seg[0])
+                and 0 <= tail_gap_ms <= max(100, decode_chunk_ms * 2)
+                and recent_partial
+                and not recent_hallucinated
+            ):
+                final_cmp = _normalize_transcript(final_text)
+                recent_cmp = _normalize_transcript(recent_partial)
+                matcher = SequenceMatcher(None, final_cmp, recent_cmp, autojunk=False)
+                matching_blocks = matcher.get_matching_blocks()
+                matched_chars = sum(block.size for block in matching_blocks)
+                final_coverage = matched_chars / max(1, len(final_cmp))
+                first_match = next(
+                    (block for block in matching_blocks if block.size), None
+                )
+                starts_aligned = bool(
+                    first_match and first_match.a <= 1 and first_match.b <= 2
+                )
+                diverged = final_cmp != recent_cmp
+                catastrophically_short = (
+                    diverged
+                    and len(final_cmp) >= 1
+                    and len(recent_cmp) >= 24
+                    and len(recent_cmp) >= len(final_cmp) * 3
+                    and starts_aligned
+                    and matched_chars >= max(1, len(final_cmp) // 2)
+                )
+                tail_regressed = (
+                    diverged
+                    and len(final_cmp) >= 16
+                    and len(recent_cmp) - len(final_cmp) >= 4
+                    and starts_aligned
+                    and final_coverage >= 0.75
+                )
+                if catastrophically_short or tail_regressed:
+                    partial_text = recent_partial
+                    long_segment_reason = (
+                        "catastrophically short"
+                        if catastrophically_short
+                        else "tail-regressed"
+                    )
+        if not partial_text:
+            return final_text
+        partial_text, partial_hallucinated = detect_and_fix_hallucination(partial_text)
+        final_cmp = _normalize_transcript(final_text)
+        partial_cmp = _normalize_transcript(partial_text)
+        segment_duration_ms = max(0, int(seg[1]) - int(seg[0]))
+        truncated_prefix = (
+            segment_duration_ms >= 2000
+            and len(final_cmp) >= 4
+            and partial_cmp.startswith(final_cmp)
+            and len(partial_cmp) >= len(final_cmp) * 2
+            and len(partial_cmp) - len(final_cmp) >= 8
+        )
+        use_partial = (
+            (final_hallucinated and not partial_hallucinated)
+            or truncated_prefix
+            or bool(long_segment_reason)
+        )
+        if use_partial and partial_cmp:
+            reason = long_segment_reason or (
+                "hallucinated" if final_hallucinated else "truncated"
+            )
+            logger.warning(
+                "Completed segment [%d-%dms] decode was %s; "
+                "keeping an aligned observed partial (%d -> %d chars)",
+                int(seg[0]), int(seg[1]), reason, len(final_text), len(partial_text),
+            )
+            return partial_text
+        return final_text
+
+    def _clear_completed_partial(self, seg):
+        self.last_partial_text = ""
+        self.last_partial_start_ms = int(seg[1])
+        self.last_partial_end_ms = int(seg[1])
+        self.last_partial_eligible = False
+        self._reset_partial_history()
+
+    def _append_completed_segment(self, seg, text):
+        if not text.strip():
+            return
+        sentence = {
+            "text": text,
+            "start": int(seg[0]),
+            "end": int(seg[1]),
+        }
+        if self.spk_tracker:
+            s0 = int(seg[0] * self.sample_rate / 1000)
+            s1 = min(int(seg[1] * self.sample_rate / 1000), self.total_samples)
+            segment_audio = self._slice_audio(s0, s1).copy()
+            self.spk_tracker.assign_streaming(
+                segment_audio,
+                seg[0] / 1000,
+                seg[1] / 1000,
+                sentence,
+            )
+        self.locked_sentences.append(sentence)
+
+    def _finalize_speakers(self):
+        if self.spk_tracker and self.locked_sentences:
+            self.locked_sentences = self.spk_tracker.finalize(self.locked_sentences)
+
+    @torch.no_grad()
+    def _decode_segment(self, seg):
+        """Decode a completed VAD segment via vLLM."""
+        start_sample = int(seg[0] * self.sample_rate / 1000)
+        end_sample = min(int(seg[1] * self.sample_rate / 1000), self.total_samples)
+        seg_audio = self._slice_audio(start_sample, end_sample)
+        text = ""
+        decode_succeeded = False
+        if len(seg_audio) >= 1600:
+            audio_tensor = torch.from_numpy(seg_audio).float()
+            try:
+                results = self.vllm_engine.generate(
+                    inputs=[audio_tensor],
+                    hotwords=self.asr_kwargs.get("hotwords"),
+                    language=self.asr_kwargs.get("language"),
+                    max_new_tokens=512,
+                )
+                text = results[0]["text"] if results else ""
+                text = _clean_asr_text(text)
+                decode_succeeded = True
+            except Exception as e:
+                logger.error(f"Segment decode error: {e}")
+
+        decoded_text = text
+        text = self._reconcile_completed_segment_text(
+            decoded_text, seg, decode_succeeded=decode_succeeded
+        )
+        retry_end_ms = min(int(self.last_partial_end_ms), int(seg[1]))
+        if (
+            decode_succeeded
+            and text != decoded_text
+            and int(seg[1]) - int(seg[0]) >= 8000
+            and int(seg[0]) < retry_end_ms < int(seg[1])
+        ):
+            retry_end_sample = min(
+                int(retry_end_ms * self.sample_rate / 1000), self.total_samples
+            )
+            retry_audio = self._slice_audio(start_sample, retry_end_sample)
+            if len(retry_audio) >= 1600:
+                try:
+                    retry_results = self.vllm_engine.generate(
+                        inputs=[torch.from_numpy(retry_audio).float()],
+                        hotwords=self.asr_kwargs.get("hotwords"),
+                        language=self.asr_kwargs.get("language"),
+                        max_new_tokens=512,
+                    )
+                    retry_text = retry_results[0]["text"] if retry_results else ""
+                    retry_text = _clean_asr_text(retry_text)
+                    if _is_supported_transcript_extension(retry_text, text):
+                        logger.warning(
+                            "Completed segment [%d-%dms] accepted an aligned "
+                            "boundary retry extension (%d -> %d chars)",
+                            int(seg[0]), int(seg[1]), len(text), len(retry_text),
+                        )
+                        text = retry_text
+                except Exception as error:
+                    logger.warning("Segment boundary retry failed: %s", error)
+        text = _postprocess_result_text(text, self.asr_kwargs)
+        self.prev_seg_text = text
+        self._clear_completed_partial(seg)
+        return text
+
+    def _build_response(self, is_final):
+        duration_ms = int(self.total_samples * 1000 / self.sample_rate)
+        sentences = list(self.locked_sentences)
+        partial = self.last_partial_text
+        if partial:
+            partial_start = self.last_partial_start_ms
+        elif self.vad.current_speech_start is not None:
+            partial_start = self.vad.current_speech_start
+        else:
+            partial_start = duration_ms
+
+        if is_final:
+            return {"sentences": sentences, "partial": "", "partial_start_ms": 0,
+                    "duration_ms": duration_ms, "is_final": True}
+        return {"sentences": sentences, "partial": partial,
+                "partial_start_ms": partial_start,
+                "duration_ms": duration_ms, "is_final": False}
+
+    def session_stats(self):
+        stats = {
+            "duration_ms": int(self.total_samples * 1000 / self.sample_rate),
+            "total_samples": self.total_samples,
+            "audio_buffer_samples": len(self.audio_buffer),
+            "audio_buffer_start_ms": int(
+                self.audio_buffer_start_sample * 1000 / self.sample_rate
+            ),
+            "locked_sentences": len(self.locked_sentences),
+            "partial_active": self.vad.current_speech_start is not None,
+            "last_decode_ms": int(self.last_decode_samples * 1000 / self.sample_rate),
+        }
+        if self.spk_tracker:
+            stats.update(self.spk_tracker.session_stats())
+        return stats
+
+    def reset(self):
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.audio_buffer_start_sample = 0
+        self.total_samples = 0
+        self.first_decode_done = False
+        self.vad.reset()
+        self.prev_text = ""
+        self.last_partial_text = ""
+        self.last_partial_start_ms = 0
+        self.last_partial_end_ms = 0
+        self.last_partial_eligible = False
+        self._reset_partial_history()
+        self.last_decode_samples = 0
+        self.locked_sentences = []
+        if self.spk_tracker:
+            self.spk_tracker.reset()
+
+
+_vllm_engine = None
+_asr_kwargs = None
+_vad_model = None
+_spk_model = None
+
+
+def load_models(args):
+    global _vllm_engine, _asr_kwargs, _vad_model, _spk_model
+    if _vllm_engine is None:
+        from funasr import AutoModel
+        from funasr.auto.auto_model_vllm import AutoModelVLLM
+
+        logger.info(f"Loading ASR (vLLM): {args.model}")
+        engine = AutoModelVLLM(
+            model=args.model, hub=args.hub, device=args.device,
+            dtype=getattr(args, 'dtype', 'bf16'),
+            tensor_parallel_size=getattr(args, 'tensor_parallel_size', 1),
+            gpu_memory_utilization=getattr(args, 'gpu_memory_utilization', 0.8),
+            max_model_len=getattr(args, 'max_model_len', 2048),
+        )
+        _vllm_engine = RealtimeBatchingEngine(
+            engine,
+            batch_wait_ms=getattr(args, "decode_batch_wait_ms", 10.0),
+            max_batch_size=getattr(args, "decode_max_batch_size", 16),
+            log_profile=getattr(args, "log_decode_profile", False),
+        )
+
+        _asr_kwargs = {}
+        hw_file = getattr(args, 'hotword_file', '热词列表')
+        if hw_file and os.path.isfile(hw_file):
+            with open(hw_file, "r", encoding="utf-8") as hf:
+                hotwords = [line.strip() for line in hf if line.strip()]
+            _asr_kwargs["hotwords"] = hotwords
+            logger.info(f"Loaded {len(hotwords)} hotwords from '{hw_file}'")
+
+        if getattr(args, 'language', None):
+            _asr_kwargs["language"] = args.language
+            logger.info(f"Language: {args.language}")
+
+        postprocess_file = getattr(args, "postprocess_hotword_file", "")
+        if postprocess_file:
+            _asr_kwargs["postprocess_hotword_file"] = postprocess_file
+            _asr_kwargs["postprocess_hotword_fuzzy"] = False
+            _asr_kwargs["return_postprocess_hotword_matches"] = True
+            logger.info(f"Loaded postprocess hotwords from '{postprocess_file}'")
+
+        if getattr(args, "endpoint_mode", "server") == "server":
+            logger.info("Loading VAD: fsmn-vad (streaming)")
+            _vad_model = AutoModel(
+                model="fsmn-vad",
+                device=getattr(args, "vad_device", "cpu"),
+                ncpu=getattr(args, "vad_ncpu", 1),
+                disable_update=True,
+            )
+        else:
+            _vad_model = None
+            logger.info("Server VAD disabled; client COMMIT controls utterance endpoints")
+
+        if getattr(args, "enable_spk", False):
+            logger.info(f"Loading SPK: {args.spk_model}")
+            _spk_model = ThreadSafeGenerateModel(
+                AutoModel(
+                    model=args.spk_model,
+                    device=args.device,
+                    disable_update=True,
+                )
+            )
+        else:
+            _spk_model = None
+            logger.info("SPK disabled; use --enable-spk to include speaker diarization")
+
+        logger.info("All models ready!")
+    return _vllm_engine, _asr_kwargs, _vad_model, _spk_model
+
+
+def create_speaker_tracker(spk_model, args):
+    if not getattr(args, "enable_spk", False) or spk_model is None:
+        return None
+    return HybridSpeakerTracker(spk_model, args.device)
+
+
+def create_vad(vad_model, args):
+    if getattr(args, "endpoint_mode", "server") == "client":
+        return ClientEndpointVAD()
+
+    session_model = copy.copy(vad_model)
+    nested_model = getattr(vad_model, "model", None)
+    if nested_model is not None:
+        session_model.model = copy.copy(nested_model)
+        vad_opts = getattr(nested_model, "vad_opts", None)
+        if vad_opts is not None:
+            session_model.model.vad_opts = copy.deepcopy(vad_opts)
+    immutable_keys = getattr(vad_model, "_IMMUTABLE_KWARGS_KEYS", frozenset())
+    for name, config in getattr(vad_model, "__dict__", {}).items():
+        if not name.endswith("kwargs") or not isinstance(config, dict):
+            continue
+        session_config = {}
+        for key, value in config.items():
+            if key in immutable_keys or not isinstance(value, (dict, list, set)):
+                session_config[key] = value
+            else:
+                session_config[key] = copy.deepcopy(value)
+        setattr(session_model, name, session_config)
+    return DynamicStreamingVAD(session_model)
+
+
+async def run_session_work(_args, operation, *operation_args, **operation_kwargs):
+    """Run one session off-loop; shared ASR calls are serialized by the batcher."""
+    return await asyncio.to_thread(operation, *operation_args, **operation_kwargs)
+
+
+def log_session_stats(session):
+    stats = session.session_stats()
+    logger.info(
+        "Session stats: duration_ms=%d audio_buffer_samples=%d "
+        "audio_buffer_start_ms=%d locked_sentences=%d partial_active=%s "
+        "speaker_history_chunks=%s speaker_history_embeddings=%s "
+        "speaker_centers=%s",
+        stats["duration_ms"],
+        stats["audio_buffer_samples"],
+        stats["audio_buffer_start_ms"],
+        stats["locked_sentences"],
+        stats["partial_active"],
+        stats.get("speaker_history_chunks", "-"),
+        stats.get("speaker_history_embeddings", "-"),
+        stats.get("speaker_centers", "-"),
+    )
+    return stats
+
+
+async def handle_client(websocket, args):
+    vllm_engine, asr_kwargs, vad_model, spk_model = load_models(args)
+    endpoint_mode = getattr(args, "endpoint_mode", "server")
+    vad = create_vad(vad_model, args)
+    spk_tracker = create_speaker_tracker(spk_model, args)
+    session = RealtimeASRSession(
+        vllm_engine,
+        asr_kwargs,
+        vad,
+        spk_tracker=spk_tracker,
+        partial_window_sec=getattr(args, 'partial_window_sec', 15.0),
+        endpoint_mode=endpoint_mode,
+    )
+    logger.info(f"Client connected: {websocket.remote_address}")
+
+    decode_interval = args.decode_interval
+    last_decode_time = 0
+    stats_interval = getattr(args, "log_session_stats_interval", 0.0)
+    last_stats_time = time.time()
+
+    try:
+        async for message in websocket:
+            if isinstance(message, str):
+                cmd = message.strip()
+                if cmd.upper() == "START":
+                    session.reset()
+                    session.is_active = True
+                    await websocket.send(json.dumps({"event": "started"}))
+                    logger.info("Session started")
+                elif cmd.upper().startswith("HOTWORDS:"):
+                    hw_str = cmd[9:]
+                    hotwords = [w.strip() for w in hw_str.split(",") if w.strip()]
+                    session.asr_kwargs = dict(session.asr_kwargs)
+                    session.asr_kwargs["hotwords"] = hotwords
+                    await websocket.send(json.dumps({"event": "hotwords_set", "hotwords": hotwords}))
+                    logger.info(f"Hotwords set: {len(hotwords)} words")
+                elif cmd.upper().startswith("POSTPROCESS_HOTWORDS:"):
+                    payload = cmd.split(":", 1)[1]
+                    hotwords = _parse_postprocess_hotwords_command(payload)
+                    session.asr_kwargs = dict(session.asr_kwargs)
+                    session.asr_kwargs["postprocess_hotwords"] = hotwords
+                    session.asr_kwargs["postprocess_hotword_fuzzy"] = False
+                    session.asr_kwargs["return_postprocess_hotword_matches"] = True
+                    await websocket.send(json.dumps({
+                        "event": "postprocess_hotwords_set",
+                        "postprocess_hotwords": hotwords,
+                    }))
+                    logger.info(f"Postprocess hotwords set: {len(hotwords)} pairs")
+                elif cmd.upper().startswith("LANGUAGE:"):
+                    lang = cmd[9:].strip()
+                    session.asr_kwargs = dict(session.asr_kwargs)
+                    session.asr_kwargs["language"] = lang if lang else None
+                    await websocket.send(json.dumps({"event": "language_set", "language": lang}))
+                    logger.info(f"Language set: {lang}")
+                elif cmd.upper() == "COMMIT":
+                    if endpoint_mode != "client":
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "event": "error",
+                                    "error": "COMMIT requires --endpoint-mode client",
+                                }
+                            )
+                        )
+                    elif not session.is_active:
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "event": "error",
+                                    "error": "Session is not active; send START first",
+                                }
+                            )
+                        )
+                    else:
+                        commit_started = time.perf_counter()
+                        result = await run_session_work(args, session.commit)
+                        await websocket.send(json.dumps(result))
+                        last_decode_time = time.time()
+                        elapsed_ms = (time.perf_counter() - commit_started) * 1000
+                        logger.info(
+                            "Commit final: %d sentences in %.1fms",
+                            len(result.get("sentences", [])),
+                            elapsed_ms,
+                        )
+                elif cmd.upper() == "STOP":
+                    if endpoint_mode == "client":
+                        has_pending_audio = (
+                            session.total_samples > session.audio_buffer_start_sample
+                        )
+                    else:
+                        has_pending_audio = session.total_samples > 0
+                    if session.is_active and has_pending_audio:
+                        if endpoint_mode == "client":
+                            result = await run_session_work(args, session.commit)
+                        else:
+                            result = await run_session_work(
+                                args, session.decode, is_final=True
+                            )
+                        await websocket.send(json.dumps(result))
+                        logger.info(
+                            "Final: %d sentences", len(result.get("sentences", []))
+                        )
+                    session.is_active = False
+                    await websocket.send(json.dumps({"event": "stopped"}))
+            elif isinstance(message, bytes) and session.is_active:
+                await run_session_work(args, session.add_audio, message)
+                now = time.time()
+                if (
+                    stats_interval
+                    and stats_interval > 0
+                    and now - last_stats_time >= stats_interval
+                ):
+                    log_session_stats(session)
+                    last_stats_time = now
+                if now - last_decode_time >= decode_interval and session.should_decode():
+                    result = await run_session_work(args, session.decode, is_final=False)
+                    await websocket.send(json.dumps(result))
+                    last_decode_time = now
+
+    except ConnectionClosed:
+        logger.info("Client disconnected")
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+
+
+def _positive_or_none(value):
+    return None if value <= 0 else value
+
+
+def build_websocket_serve_kwargs(args):
+    return {
+        "max_size": args.ws_max_size,
+        "ping_interval": _positive_or_none(args.ws_ping_interval),
+        "ping_timeout": _positive_or_none(args.ws_ping_timeout),
+        "close_timeout": args.ws_close_timeout,
+    }
+
+
+async def main(args):
+    load_models(args)
+    logger.info(f"Server on ws://0.0.0.0:{args.port}")
+    serve_kwargs = build_websocket_serve_kwargs(args)
+    logger.info(
+        "WebSocket options: "
+        f"max_size={serve_kwargs['max_size']}, "
+        f"ping_interval={serve_kwargs['ping_interval']}, "
+        f"ping_timeout={serve_kwargs['ping_timeout']}, "
+        f"close_timeout={serve_kwargs['close_timeout']}"
+    )
+    async with websockets.serve(
+        lambda ws: handle_client(ws, args), "0.0.0.0", args.port, **serve_kwargs,
+    ):
+        await asyncio.Future()
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(description="Fun-ASR-Nano Streaming WebSocket Server")
+    parser.add_argument("--port", type=int, default=10095)
+    parser.add_argument("--model", type=str, default="FunAudioLLM/Fun-ASR-Nano-2512")
+    parser.add_argument("--hub", type=str, default="ms", choices=["ms", "hf"])
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument(
+        "--vad-device",
+        type=str,
+        default="cpu",
+        help="Device for per-session streaming VAD; CPU avoids frequent GPU synchronization.",
+    )
+    parser.add_argument(
+        "--vad-ncpu",
+        type=int,
+        default=1,
+        help="CPU threads per streaming VAD session.",
+    )
+    parser.add_argument("--use-context", action="store_true", default=True)
+    parser.add_argument("--no-context", dest="use_context", action="store_false")
+    parser.add_argument("--decode-interval", type=float, default=0.48)
+    parser.add_argument(
+        "--decode-batch-wait-ms",
+        type=float,
+        default=10.0,
+        help="Maximum time to collect compatible cross-session decodes into one batch.",
+    )
+    parser.add_argument(
+        "--decode-max-batch-size",
+        type=int,
+        default=16,
+        help="Maximum number of audio segments submitted in one batched decode.",
+    )
+    parser.add_argument(
+        "--log-decode-profile",
+        action="store_true",
+        help=(
+            "Log per-engine-batch request counts, audio durations, queue wait, "
+            "and engine latency for performance investigations."
+        ),
+    )
+    parser.add_argument(
+        "--endpoint-mode",
+        choices=["server", "client"],
+        default="server",
+        help=(
+            "Use server VAD endpoints (default), or accept client COMMIT messages "
+            "without loading the VAD model."
+        ),
+    )
+    parser.add_argument("--partial-window-sec", type=float, default=15.0,
+                        help="Cap the interim partial re-decode window to the most recent N seconds. "
+                             "A long ongoing speech segment is otherwise re-encoded from its start on "
+                             "every chunk (O(L^2)), which saturates the GPU under concurrency and times "
+                             "out long-segment requests. Lower it (e.g. 8-10) for high-concurrency "
+                             "self-hosting; <=0 disables (legacy behaviour). Final transcripts are unaffected.")
+    parser.add_argument("--enable-spk", action="store_true", help="Enable streaming speaker diarization.")
+    parser.add_argument("--spk-model", type=str, default="iic/speech_eres2netv2_sv_zh-cn_16k-common")
+    parser.add_argument("--hotword-file", type=str, default="热词列表")
+    parser.add_argument(
+        "--postprocess-hotword-file",
+        type=str,
+        default="",
+        help=(
+            "Deterministic text-level hotword corrections applied to final "
+            "sentences after decoding. Lines should be 'wrong=>right' pairs. "
+            "Unlike --hotword-file, this does not bias "
+            "model decoding or hallucinate words during silence."
+        ),
+    )
+    parser.add_argument("--language", type=str, default=None, help="Language hint (e.g. 中文, English, 日本語)")
+    parser.add_argument(
+        "--dtype",
+        type=lambda value: "fp32" if value == "float32" else value,
+        default="bf16",
+        choices=["bf16", "fp16", "fp32", "float32"],
+    )
+    parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
+    parser.add_argument("--max-model-len", type=int, default=2048)
+    parser.add_argument("--ws-ping-interval", type=float, default=20.0,
+                        help="WebSocket ping interval in seconds; <=0 disables keepalive pings.")
+    parser.add_argument(
+        "--ws-ping-timeout",
+        type=float,
+        default=0.0,
+        help=(
+            "WebSocket ping timeout in seconds; disabled by default because "
+            "decode/queue backpressure can delay pong handling. Set a positive "
+            "value only above the measured worst-case delay."
+        ),
+    )
+    parser.add_argument("--ws-close-timeout", type=float, default=10.0,
+                        help="WebSocket close handshake timeout in seconds.")
+    parser.add_argument("--ws-max-size", type=int, default=10 * 1024 * 1024,
+                        help="Maximum incoming WebSocket message size in bytes.")
+    parser.add_argument("--log-session-stats-interval", type=float, default=0.0,
+                        help="Log bounded long-session state every N seconds; <=0 disables.")
+    return parser
+
+
+def cli_main():
+    args = build_arg_parser().parse_args()
+    asyncio.run(main(args))
+
+
+if __name__ == "__main__":
+    cli_main()

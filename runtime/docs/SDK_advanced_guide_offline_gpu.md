@@ -24,7 +24,7 @@ If you have already installed Docker, ignore this step!
 curl -O https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/shell/install_docker.sh;
 sudo bash install_docker.sh
 ```
-If you do not have Docker installed, please refer to [Docker Installation](https://alibaba-damo-academy.github.io/FunASR/en/installation/docker.html)
+If you do not have Docker installed, please refer to [Docker Installation](https://modelscope.github.io/FunASR/installation.html#docker)
 
 ### Pulling and launching images
 Use the following command to pull and launch the Docker image for the FunASR runtime-SDK:
@@ -169,8 +169,8 @@ If you want to define your own client, see the [Websocket communication protocol
 The code for FunASR-runtime is open source. If the server and client cannot fully meet your needs, you can further develop them based on your own requirements:
 
 ### C++ client
-https://github.com/alibaba-damo-academy/FunASR/tree/main/runtime/websocket
+https://github.com/modelscope/FunASR/tree/main/runtime/websocket
 
 ### Python client
-https://github.com/alibaba-damo-academy/FunASR/tree/main/runtime/python/websocket
+https://github.com/modelscope/FunASR/tree/main/runtime/python/websocket
 

@@ -1,449 +1,375 @@
-[//]: # '<div align="left"><img src="docs/images/funasr_logo.jpg" width="400"/></div>'
+([English](./README.md)|简体中文|[日本語](./README_ja.md)|[한국어](./README_ko.md))
 
-(简体中文|[English](./README.md))
+<p align="center">
+<a href="https://github.com/modelscope/FunASR"><img src="https://svg-banners.vercel.app/api?type=origin&text1=FunASR🤠&text2=💖%20A%20Fundamental%20End-to-End%20Speech%20Recognition%20Toolkit&width=800&height=210" alt="FunASR"></a>
+</p>
 
-[![SVG Banners](https://svg-banners.vercel.app/api?type=origin&text1=FunASR🤠&text2=💖%20A%20Fundamental%20End-to-End%20Speech%20Recognition%20Toolkit&width=800&height=210)](https://github.com/Akshay090/svg-banners)
+<p align="center">
+  <strong>面向离线、流式与边缘部署的工业级语音识别工具箱。</strong><br>
+  <em>ASR · VAD · 标点 · 说话人 pipeline · 情感与音频事件模型 · OpenAI 兼容服务</em>
+</p>
 
-[//]: # "# FunASR: A Fundamental End-to-End Speech Recognition Toolkit"
+<p align="center">
+  <a href="https://pypi.org/project/funasr/"><img src="https://img.shields.io/pypi/v/funasr" alt="PyPI"></a>
+  <a href="https://github.com/modelscope/FunASR"><img src="https://img.shields.io/github/stars/modelscope/FunASR?style=social" alt="Stars"></a>
+  <a href="https://pypi.org/project/funasr/"><img src="https://img.shields.io/pypi/dm/funasr" alt="Downloads"></a>
+  <a href="https://modelscope.github.io/FunASR/zh/"><img src="https://img.shields.io/badge/文档-在线-blue" alt="Docs"></a>
+</p>
 
-[![PyPI](https://img.shields.io/pypi/v/funasr)](https://pypi.org/project/funasr/)
+<p align="center">
+<a href="https://trendshift.io/repositories/10479" target="_blank"><img src="https://trendshift.io/api/badge/repositories/10479" alt="modelscope%2FFunASR | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+</p>
 
-FunASR 希望在语音识别的学术研究和工业应用之间架起一座桥梁。通过发布工业级语音识别模型的训练和微调，研究人员和开发人员可以更方便地进行语音识别模型的研究和生产，并推动语音识别生态的发展。让语音识别更有趣！
+<p align="center">
+  <a href="#快速开始">快速开始</a> · <a href="./examples/colab/README_zh.md">Colab</a> · <a href="#性能评测">性能评测</a> · <a href="./docs/model_selection_zh.md">模型选择</a> · <a href="./docs/migration_from_whisper_zh.md">迁移指南</a> · <a href="./docs/use_case_showcase_zh.md">场景速览</a> · <a href="./docs/community_projects_zh.md">社区集成</a> · <a href="./docs/deployment_matrix_zh.md">部署选型</a> · <a href="https://www.funasr.com/">部署中心</a> · <a href="./docs/troubleshooting_zh.md">排障 FAQ</a> · <a href="#模型列表">模型列表</a> · <a href="https://modelscope.github.io/FunASR/agent.html">Agent 集成</a> · <a href="./integrations/openclaw/">OpenClaw</a> · <a href="https://modelscope.github.io/FunASR/zh/">文档</a> · <a href="./CONTRIBUTING.md">贡献</a>
+</p>
 
-<div align="center">
-<h4>
- <a href="#核心功能"> 核心功能 </a>
-｜<a href="#最新动态"> 最新动态 </a>
-｜<a href="#安装教程"> 安装 </a>
-｜<a href="#快速开始"> 快速开始 </a>
-｜<a href="https://github.com/alibaba-damo-academy/FunASR/blob/main/docs/tutorial/README_zh.md"> 教程文档 </a>
-｜<a href="#模型仓库"> 模型仓库 </a>
-｜<a href="#服务部署"> 服务部署 </a>
-｜<a href="#联系我们"> 联系我们 </a>
-</h4>
-</div>
-
-<a name="核心功能"></a>
-
-## 核心功能
-
-- FunASR 是一个基础语音识别工具包，提供多种功能，包括语音识别（ASR）、语音端点检测（VAD）、标点恢复、语言模型、说话人验证、说话人分离和多人对话语音识别等。FunASR 提供了便捷的脚本和教程，支持预训练好的模型的推理与微调。
-- 我们在[ModelScope](https://www.modelscope.cn/models?page=1&tasks=auto-speech-recognition)与[huggingface](https://huggingface.co/FunASR)上发布了大量开源数据集或者海量工业数据训练的模型，可以通过我们的[模型仓库](https://github.com/modelscope/FunASR/blob/main/model_zoo/readme_zh.md)了解模型的详细信息。代表性的[Paraformer](https://www.modelscope.cn/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary)非自回归端到端语音识别模型具有高精度、高效率、便捷部署的优点，支持快速构建语音识别服务，详细信息可以阅读([服务部署文档](runtime/readme_cn.md))。
-
-<a name="最新动态"></a>
-
-## 最新动态
-
-- 2025/12/15: [Fun-ASR-Nano-2512](https://github.com/FunAudioLLM/Fun-ASR) 是一款基于数千万小时真实语音数据训练的端到端语音识别大模型。它支持低延迟实时转写，并涵盖 31 种语言识别功能。
-- 2024/10/29: 中文实时语音听写服务 1.12 发布，2pass-offline 模式支持 SensevoiceSmall 模型；详细信息参阅([部署文档](runtime/readme_cn.md))
-- 2024/10/10：新增加 Whisper-large-v3-turbo 模型支持，多语言语音识别/翻译/语种识别，支持从 [modelscope](examples/industrial_data_pretraining/whisper/demo.py)仓库下载，也支持从 [openai](examples/industrial_data_pretraining/whisper/demo_from_openai.py)仓库下载模型。
-- 2024/09/26: 中文离线文件转写服务 4.6、英文离线文件转写服务 1.7、中文实时语音听写服务 1.11 发布，修复 ONNX 内存泄漏、支持 SensevoiceSmall onnx 模型；中文离线文件转写服务 GPU 2.0 发布，修复显存泄漏; 详细信息参阅([部署文档](runtime/readme_cn.md))
-- 2024/09/25：新增语音唤醒模型，支持[fsmn_kws](https://modelscope.cn/models/iic/speech_sanm_kws_phone-xiaoyun-commands-online), [fsmn_kws_mt](https://modelscope.cn/models/iic/speech_sanm_kws_phone-xiaoyun-commands-online), [sanm_kws](https://modelscope.cn/models/iic/speech_sanm_kws_phone-xiaoyun-commands-offline), [sanm_kws_streaming](https://modelscope.cn/models/iic/speech_sanm_kws_phone-xiaoyun-commands-online) 4 个模型的微调和推理。
-- 2024/07/04：[SenseVoice](https://github.com/FunAudioLLM/SenseVoice) 是一个基础语音理解模型，具备多种语音理解能力，涵盖了自动语音识别（ASR）、语言识别（LID）、情感识别（SER）以及音频事件检测（AED）。
- 
-<details><summary>展开日志</summary>
-
-- 2024/07/01：中文离线文件转写服务 GPU 版本 1.1 发布，优化 bladedisc 模型兼容性问题；详细信息参阅([部署文档](runtime/readme_cn.md))
-- 2024/06/27：中文离线文件转写服务 GPU 版本 1.0 发布，支持动态 batch，支持多路并发，在长音频测试集上单线 RTF 为 0.0076，多线加速比为 1200+（CPU 为 330+）；详细信息参阅([部署文档](runtime/readme_cn.md))
-- 2024/05/15：新增加情感识别模型，[emotion2vec+large](https://modelscope.cn/models/iic/emotion2vec_plus_large/summary)，[emotion2vec+base](https://modelscope.cn/models/iic/emotion2vec_plus_base/summary)，[emotion2vec+seed](https://modelscope.cn/models/iic/emotion2vec_plus_seed/summary)，输出情感类别为：生气/angry，开心/happy，中立/neutral，难过/sad。
-- 2024/05/15: 中文离线文件转写服务 4.5、英文离线文件转写服务 1.6、中文实时语音听写服务 1.10 发布，适配 FunASR 1.0 模型结构；详细信息参阅([部署文档](runtime/readme_cn.md))
-- 2024/03/05：新增加 Qwen-Audio 与 Qwen-Audio-Chat 音频文本模态大模型，在多个音频领域测试榜单刷榜，中支持语音对话，详细用法见 [示例](examples/industrial_data_pretraining/qwen_audio)。
-- 2024/03/05：新增加 Whisper-large-v3 模型支持，多语言语音识别/翻译/语种识别，支持从 [modelscope](examples/industrial_data_pretraining/whisper/demo.py)仓库下载，也支持从 [openai](examples/industrial_data_pretraining/whisper/demo_from_openai.py)仓库下载模型。
-- 2024/03/05: 中文离线文件转写服务 4.4、英文离线文件转写服务 1.5、中文实时语音听写服务 1.9 发布，docker 镜像支持 arm64 平台，升级 modelscope 版本；详细信息参阅([部署文档](runtime/readme_cn.md))
-- 2024/01/30：funasr-1.0 发布，更新说明[文档](https://github.com/alibaba-damo-academy/FunASR/discussions/1319)
-- 2024/01/30：新增加情感识别 [模型链接](https://www.modelscope.cn/models/iic/emotion2vec_base_finetuned/summary)，原始模型 [repo](https://github.com/ddlBoJack/emotion2vec).
-- 2024/01/25: 中文离线文件转写服务 4.2、英文离线文件转写服务 1.3，优化 vad 数据处理方式，大幅降低峰值内存占用，内存泄漏优化；中文实时语音听写服务 1.7 发布，客户端优化；详细信息参阅([部署文档](runtime/readme_cn.md))
-- 2024/01/09: funasr 社区软件包 windows 2.0 版本发布，支持软件包中文离线文件转写 4.1、英文离线文件转写 1.2、中文实时听写服务 1.6 的最新功能，详细信息参阅([FunASR 社区软件包 windows 版本](https://www.modelscope.cn/models/damo/funasr-runtime-win-cpu-x64/summary))
-- 2024/01/03: 中文离线文件转写服务 4.0 发布，新增支持 8k 模型、优化时间戳不匹配问题及增加句子级别时间戳、优化英文单词 fst 热词效果、支持自动化配置线程参数，同时修复已知的 crash 问题及内存泄漏问题，详细信息参阅([部署文档](runtime/readme_cn.md#中文离线文件转写服务cpu版本))
-- 2024/01/03: 中文实时语音听写服务 1.6 发布，2pass-offline 模式支持 Ngram 语言模型解码、wfst 热词，同时修复已知的 crash 问题及内存泄漏问题，详细信息参阅([部署文档](runtime/readme_cn.md#中文实时语音听写服务cpu版本))
-- 2024/01/03: 英文离线文件转写服务 1.2 发布，修复已知的 crash 问题及内存泄漏问题，详细信息参阅([部署文档](runtime/readme_cn.md#英文离线文件转写服务cpu版本))
-- 2023/12/04: funasr 社区软件包 windows 1.0 版本发布，支持中文离线文件转写、英文离线文件转写、中文实时听写服务，详细信息参阅([FunASR 社区软件包 windows 版本](https://www.modelscope.cn/models/damo/funasr-runtime-win-cpu-x64/summary))
-- 2023/11/08：中文离线文件转写服务 3.0 CPU 版本发布，新增标点大模型、Ngram 语言模型与 wfst 热词，详细信息参阅([部署文档](runtime/readme_cn.md#中文离线文件转写服务cpu版本))
-- 2023/10/17: 英文离线文件转写服务一键部署的 CPU 版本发布，详细信息参阅([部署文档](runtime/readme_cn.md#英文离线文件转写服务cpu版本))
-- 2023/10/13: [SlideSpeech](https://slidespeech.github.io/): 一个大规模的多模态音视频语料库，主要是在线会议或者在线课程场景，包含了大量与发言人讲话实时同步的幻灯片。
-- 2023.10.10: [Paraformer-long-Spk](https://github.com/alibaba-damo-academy/FunASR/blob/main/egs_modelscope/asr_vad_spk/speech_paraformer-large-vad-punc-spk_asr_nat-zh-cn/demo.py)模型发布，支持在长语音识别的基础上获取每句话的说话人标签。
-- 2023.10.07: [FunCodec](https://github.com/alibaba-damo-academy/FunCodec): FunCodec 提供开源模型和训练工具，可以用于音频离散编码，以及基于离散编码的语音识别、语音合成等任务。
-- 2023.09.01: 中文离线文件转写服务 2.0 CPU 版本发布，新增 ffmpeg、时间戳与热词模型支持，详细信息参阅([部署文档](runtime/readme_cn.md#中文离线文件转写服务cpu版本))
-- 2023.08.07: 中文实时语音听写服务一键部署的 CPU 版本发布，详细信息参阅([部署文档](runtime/readme_cn.md#中文实时语音听写服务cpu版本))
-- 2023.07.17: BAT 一种低延迟低内存消耗的 RNN-T 模型发布，详细信息参阅（[BAT](egs/aishell/bat)）
-- 2023.06.26: ASRU2023 多通道多方会议转录挑战赛 2.0 完成竞赛结果公布，详细信息参阅（[M2MeT2.0](https://alibaba-damo-academy.github.io/FunASR/m2met2_cn/index.html)）
-
-</details>
-
-<a name="安装教程"></a>
-
-## 安装教程
-
-- 安装 funasr 之前，确保已经安装了下面依赖环境:
-
-```text
-python>=3.8
-torch>=1.13
-torchaudio
-```
-
-- pip 安装
-
-```shell
-pip3 install -U funasr
-```
-
-- 或者从源代码安装
-
-```sh
-git clone https://github.com/alibaba/FunASR.git && cd FunASR
-pip3 install -e ./
-```
-
-如果需要使用工业预训练模型，安装 modelscope 与 huggingface_hub（可选）
-
-```shell
-pip3 install -U modelscope huggingface huggingface_hub
-```
-
-## 模型仓库
-
-FunASR 开源了大量在工业数据上预训练模型，您可以在[模型许可协议](./MODEL_LICENSE)下自由使用、复制、修改和分享 FunASR 模型，下面列举代表性的模型，更多模型请参考 [模型仓库](./model_zoo)。
-
-（注：⭐ 表示 ModelScope 模型仓库，🤗 表示 Huggingface 模型仓库，🍀 表示 OpenAI 模型仓库）
-
-|                                                                                                     模型名字                                                                                                      |                           任务详情                           |       训练数据       |  参数量   |
-|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:--------------------------------------------------------:|:----------------:|:------:|
-|                    Fun-ASR-Nano <br> ([⭐](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512) [🤗](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512) )                                        | 语音识别，支持中文、英文与日语，其中中文支持7个方言，26个地方口音，英文与日语覆盖多地区口音，歌词识别，说唱等 |      数千万小时       |  800M  |
-|                                  SenseVoiceSmall <br> ([⭐](https://www.modelscope.cn/models/iic/SenseVoiceSmall) [🤗](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) )                                   | 多种语音理解能力，涵盖了自动语音识别（ASR）、语言识别（LID）、情感识别（SER）以及音频事件检测（AED） |   400000 小时，中文   |  330M  |
-|    paraformer-zh <br> ([⭐](https://www.modelscope.cn/models/damo/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) [🤗](https://huggingface.co/funasr/paraformer-zh) )     |                     语音识别，带时间戳输出，非实时                      |   60000 小时，中文    |  220M  |
-| paraformer-zh-streaming <br> ( [⭐](https://modelscope.cn/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online/summary) [🤗](https://huggingface.co/funasr/paraformer-zh-streaming) ) |                         语音识别，实时                          |   60000 小时，中文    |  220M  |
-|         paraformer-en <br> ( [⭐](https://www.modelscope.cn/models/damo/speech_paraformer-large-vad-punc_asr_nat-en-16k-common-vocab10020/summary) [🤗](https://huggingface.co/funasr/paraformer-en) )         |                         语音识别，非实时                         |   50000 小时，英文    |  220M  |
-|                      conformer-en <br> ( [⭐](https://modelscope.cn/models/damo/speech_conformer_asr-en-16k-vocab4199-pytorch/summary) [🤗](https://huggingface.co/funasr/conformer-en) )                      |                         语音识别，非实时                         |   50000 小时，英文    |  220M  |
-|                        ct-punc <br> ( [⭐](https://modelscope.cn/models/damo/punc_ct-transformer_cn-en-common-vocab471067-large/summary) [🤗](https://huggingface.co/funasr/ct-punc) )                         |                           标点恢复                           |    100M，中文与英文    |  290M  |
-|                            fsmn-vad <br> ( [⭐](https://modelscope.cn/models/damo/speech_fsmn_vad_zh-cn-16k-common-pytorch/summary) [🤗](https://huggingface.co/funasr/fsmn-vad) )                             |                        语音端点检测，实时                         |  5000 小时，中文与英文   |  0.4M  |
-|                                                       fsmn-kws <br> ( [⭐](https://modelscope.cn/models/iic/speech_charctc_kws_phone-xiaoyun/summary) )                                                        |                         语音唤醒，实时                          |    5000 小时，中文    |  0.7M  |
-|                              fa-zh <br> ( [⭐](https://modelscope.cn/models/damo/speech_timestamp_prediction-v1-16k-offline/summary) [🤗](https://huggingface.co/funasr/fa-zh) )                               |                         字级别时间戳预测                         |   50000 小时，中文    |  38M   |
-|                                 cam++ <br> ( [⭐](https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common/summary) [🤗](https://huggingface.co/funasr/campplus) )                                 |                         说话人确认/分割                         |     5000 小时      |  7.2M  |
-|                                      Whisper-large-v3 <br> ([⭐](https://www.modelscope.cn/models/iic/Whisper-large-v3/summary) [🍀](https://github.com/openai/whisper) )                                      |                     语音识别，带时间戳输出，非实时                      |       多语言        | 1550 M |
-|                                Whisper-large-v3-turbo <br> ([⭐](https://www.modelscope.cn/models/iic/Whisper-large-v3-turbo/summary) [🍀](https://github.com/openai/whisper) )                                |                     语音识别，带时间戳输出，非实时                      |       多语言        | 809 M  |
-|                                         Qwen-Audio <br> ([⭐](examples/industrial_data_pretraining/qwen_audio/demo.py) [🤗](https://huggingface.co/Qwen/Qwen-Audio) )                                          |                     音频文本多模态大模型（预训练）                      |       多语言        |   8B   |
-|                                  Qwen-Audio-Chat <br> ([⭐](examples/industrial_data_pretraining/qwen_audio/demo_chat.py) [🤗](https://huggingface.co/Qwen/Qwen-Audio-Chat) )                                  |                   音频文本多模态大模型（chat 版本）                    |       多语言        |   8B   |
-|                        emotion2vec+large <br> ([⭐](https://modelscope.cn/models/iic/emotion2vec_plus_large/summary) [🤗](https://huggingface.co/emotion2vec/emotion2vec_plus_large) )                         |                          情感识别模型                          | 40000 小时，4 种情感类别 |  300M  |
-
-<a name="快速开始"></a>
+---
 
 ## 快速开始
 
-下面为快速上手教程，测试音频（[中文](https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/vad_example.wav)，[英文](https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_en.wav)）
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/modelscope/FunASR/blob/main/examples/colab/funasr_quickstart.ipynb)
 
-### 可执行命令行
+不想先配置本地环境？可以打开 [Colab 快速体验](./examples/colab/README_zh.md) 在浏览器里转写公开样例或上传自己的音频。
 
-```shell
-funasr ++model=paraformer-zh ++vad_model="fsmn-vad" ++punc_model="ct-punc" ++input=asr_example_zh.wav
+```bash
+pip install torch torchaudio
+pip install funasr
 ```
 
-注：支持单条音频文件识别，也支持文件列表，列表为 kaldi 风格 wav.scp：`wav_id   wav_path`
+如果要运行 GPU quickstart，请先按 [pytorch.org](https://pytorch.org/get-started/locally/)
+选择与你的 NVIDIA driver 匹配的 PyTorch / torchaudio CUDA wheel，再安装 FunASR。
+安装后先确认 GPU 可见：
 
-### 非实时语音识别
-
-#### Fun-ASR-Nano
-
-```python
-from funasr import AutoModel
-
-model_dir = "FunAudioLLM/Fun-ASR-Nano-2512"
-
-model = AutoModel(
-    model=model_dir,
-    vad_model="fsmn-vad",
-    vad_kwargs={"max_single_segment_time": 30000},
-    device="cuda:0",
-)
-res = model.generate(input=[wav_path], cache={}, batch_size_s=0)
-text = res[0]["text"]
-print(text)
+```bash
+python - <<'PY'
+import torch
+print(torch.cuda.is_available())
+PY
 ```
-参数说明：
-- `model_dir`：模型名称，或本地磁盘中的模型路径。
-- `vad_model`：表示开启 VAD，VAD 的作用是将长音频切割成短音频，此时推理耗时包括了 VAD 与 SenseVoice 总耗时，为链路耗时，如果需要单独测试 SenseVoice 模型耗时，可以关闭 VAD 模型。
-- `vad_kwargs`：表示 VAD 模型配置,`max_single_segment_time`: 表示`vad_model`最大切割音频时长, 单位是毫秒 ms。
-- `batch_size_s` 表示采用动态 batch，batch 中总音频时长，单位为秒 s。
 
-
-
-#### SenseVoice
+只有这里输出 `True` 时才使用 `device="cuda"`；否则请先使用
+`device="cpu"`，或重新安装匹配 CUDA 的 PyTorch wheel。
 
 ```python
 from funasr import AutoModel
 from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
-model_dir = "iic/SenseVoiceSmall"
+model = AutoModel(model="iic/SenseVoiceSmall", vad_model="fsmn-vad", spk_model="cam++", device="cuda")
+result = model.generate(input="https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav")
 
-model = AutoModel(
-    model=model_dir,
-    vad_model="fsmn-vad",
-    vad_kwargs={"max_single_segment_time": 30000},
-    device="cuda:0",
-)
-
-# en
-res = model.generate(
-    input=f"{model.model_path}/example/en.mp3",
-    cache={},
-    language="auto",  # "zn", "en", "yue", "ja", "ko", "nospeech"
-    use_itn=True,
-    batch_size_s=60,
-    merge_vad=True,  #
-    merge_length_s=15,
-)
-text = rich_transcription_postprocess(res[0]["text"])
-print(text)
+# AutoModel pipeline 返回带说话人 id 和时间戳的 VAD 分段：
+for seg in result[0]["sentence_info"]:
+    print(f"[{seg['start']/1000:.1f}s] 说话人{seg['spk']}: {rich_transcription_postprocess(seg['sentence'])}")
 ```
 
-参数说明：
-
-- `model_dir`：模型名称，或本地磁盘中的模型路径。
-- `vad_model`：表示开启 VAD，VAD 的作用是将长音频切割成短音频，此时推理耗时包括了 VAD 与 SenseVoice 总耗时，为链路耗时，如果需要单独测试 SenseVoice 模型耗时，可以关闭 VAD 模型。
-- `vad_kwargs`：表示 VAD 模型配置,`max_single_segment_time`: 表示`vad_model`最大切割音频时长, 单位是毫秒 ms。
-- `use_itn`：输出结果中是否包含标点与逆文本正则化。
-- `batch_size_s` 表示采用动态 batch，batch 中总音频时长，单位为秒 s。
-- `merge_vad`：是否将 vad 模型切割的短音频碎片合成，合并后长度为`merge_length_s`，单位为秒 s。
-- `ban_emo_unk`：禁用 emo_unk 标签，禁用后所有的句子都会被赋与情感标签。
-
-#### Paraformer
-
-```python
-from funasr import AutoModel
-# paraformer-zh is a multi-functional asr model
-# use vad, punc, spk or not as you need
-model = AutoModel(model="paraformer-zh",  vad_model="fsmn-vad", punc_model="ct-punc",
-                  # spk_model="cam++"
-                  )
-res = model.generate(input=f"{model.model_path}/example/asr_example.wav",
-            batch_size_s=300,
-            hotword='魔搭')
-print(res)
+**输出** — 带说话人标签、时间戳和标点的结构化文本：
+```
+[0.6s] 说话人0: 欢迎大家来体验达摩院推出的语音识别模型
 ```
 
-注：`hub`：表示模型仓库，`ms`为选择 modelscope 下载，`hf`为选择 huggingface 下载。
+这是一次 `AutoModel` pipeline 调用，实际组合了 SenseVoiceSmall、FSMN-VAD
+和 CAM++ 三个独立模型；说话人分离由 CAM++ 提供，并非 SenseVoiceSmall
+checkpoint 的内置输出。
+SenseVoice 论文见 [arXiv:2407.04051](https://arxiv.org/abs/2407.04051)，
+模型见 [Hugging Face checkpoint](https://huggingface.co/FunAudioLLM/SenseVoiceSmall)，
+边缘部署可用 [GGUF checkpoint](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF)。
 
-### 实时语音识别
+### LLM 语音识别：Fun-ASR-Nano
+
+Fun-ASR-Nano 是基于 SenseVoice 编码器 + Qwen3-0.6B 解码器的 LLM-ASR，
+支持中文、英语、日语，以及 7 种中文方言和 26 种地域口音：
 
 ```python
 from funasr import AutoModel
 
-chunk_size = [0, 10, 5] #[0, 10, 5] 600ms, [0, 8, 4] 480ms
-encoder_chunk_look_back = 4 #number of chunks to lookback for encoder self-attention
-decoder_chunk_look_back = 1 #number of encoder chunks to lookback for decoder cross-attention
-
-model = AutoModel(model="paraformer-zh-streaming")
-
-import soundfile
-import os
-
-wav_file = os.path.join(model.model_path, "example/asr_example.wav")
-speech, sample_rate = soundfile.read(wav_file)
-chunk_stride = chunk_size[1] * 960 # 600ms
-
-cache = {}
-total_chunk_num = int(len((speech)-1)/chunk_stride+1)
-for i in range(total_chunk_num):
-    speech_chunk = speech[i*chunk_stride:(i+1)*chunk_stride]
-    is_final = i == total_chunk_num - 1
-    res = model.generate(input=speech_chunk, cache=cache, is_final=is_final, chunk_size=chunk_size, encoder_chunk_look_back=encoder_chunk_look_back, decoder_chunk_look_back=decoder_chunk_look_back)
-    print(res)
+model = AutoModel(model="FunAudioLLM/Fun-ASR-Nano-2512", vad_model="fsmn-vad", device="cuda")
+result = model.generate(input="https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav")
 ```
 
-注：`chunk_size`为流式延时配置，`[0,10,5]`表示上屏实时出字粒度为`10*60=600ms`，未来信息为`5*60=300ms`。每次推理输入为`600ms`（采样点数为`16000*0.6=960`），输出为对应文字，最后一个语音片段输入需要设置`is_final=True`来强制输出最后一个字。
+需要 31 语种时，请改用独立的
+[Fun-ASR-MLT-Nano-2512](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512)
+checkpoint。Nano 与 MLT-Nano 的语言范围不同，使用时请按 checkpoint 选择。
 
-<details><summary>更多例子</summary>
-
-### 语音端点检测（非实时）
+使用 vLLM 做高吞吐批处理：
 
 ```python
-from funasr import AutoModel
+from funasr.auto.auto_model_vllm import AutoModelVLLM
 
-model = AutoModel(model="fsmn-vad")
-
-wav_file = f"{model.model_path}/example/vad_example.wav"
-res = model.generate(input=wav_file)
-print(res)
+model = AutoModelVLLM(model="FunAudioLLM/Fun-ASR-Nano-2512", tensor_parallel_size=1)
+results = model.generate(["audio1.wav", "audio2.wav"], language="auto")
 ```
 
-注：VAD 模型输出格式为：`[[beg1, end1], [beg2, end2], .., [begN, endN]]`，其中`begN/endN`表示第`N`个有效音频片段的起始点/结束点，
-单位为毫秒。
+> **部署为 API 服务：** `funasr-server --device cuda` → 本地 OpenAI 兼容接口 localhost:8000
+>
+> **接入 AI Agent：** [MCP 服务](examples/mcp_server/) 支持 Claude/Cursor · [OpenAI API](examples/openai_api/README_zh.md) 支持 LangChain/Dify/AutoGen
+>
+> **接入语音 Agent：** [OpenClaw 实时转写插件](integrations/openclaw/) 支持私有部署的 Talk 与 Voice Call 转写
 
-### 语音端点检测（实时）
+### 为什么选 FunASR？
 
-```python
-from funasr import AutoModel
+Whisper 是单个模型，**FunASR 是一个工具箱**——按场景挑模型：
+**Fun-ASR-Nano**（中/英/日及中文方言，需 GPU）、
+**Fun-ASR-MLT-Nano**（31 语种）、**SenseVoiceSmall**（五语种 ASR，
+并返回情感与音频事件标签）、**Paraformer**（低延迟流式）。下表展示的是
+工具箱级能力，并标明由哪个模型或 pipeline 提供：
 
-chunk_size = 200 # ms
-model = AutoModel(model="fsmn-vad")
+| | FunASR（工具箱） | Whisper | 云端 API |
+|---|---|---|---|
+| 最高速度 | **340 倍实时**（Fun-ASR-Nano + vLLM） | 13 倍实时 | ~1 倍实时 |
+| 说话人识别 | ✅ 由 VAD + CAM++ pipeline 提供 | ❌ 需要 pyannote | ✅ 额外付费 |
+| 情感识别 | ✅ 由 SenseVoice 提供 | ❌ | ❌ |
+| 语言数 | 取决于 checkpoint（例如 Qwen3-ASR 52、MLT-Nano 31、Nano 中/英/日） | 57 | 因服务而异 |
+| 流式识别 | ✅ WebSocket（Paraformer） | ❌ | ✅ |
+| CPU 可用 | ✅ 17 倍实时（SenseVoice） | ❌ 太慢 | 不适用 |
+| 私有部署 | ✅ 支持（工具箱 MIT；模型协议各异） | ✅ MIT 开源 | ❌ 仅云端 |
+| 费用 | 免费 | 免费 | ¥0.04/分钟起 |
 
-import soundfile
+第一次试用 FunASR？可以先跑 [Colab 快速体验](./examples/colab/README_zh.md)，再配置本地环境。还不确定先用哪个模型？先看 [模型选择指南](./docs/model_selection_zh.md)。计划从 Whisper 或云端 ASR 切换？请按 [迁移指南](./docs/migration_from_whisper_zh.md) 和 [评测示例](./examples/migration/) 用代表性音频评测、映射功能并安全上线。
 
-wav_file = f"{model.model_path}/example/vad_example.wav"
-speech, sample_rate = soundfile.read(wav_file)
-chunk_stride = int(chunk_size * sample_rate / 1000)
+---
 
-cache = {}
-total_chunk_num = int(len((speech)-1)/chunk_stride+1)
-for i in range(total_chunk_num):
-    speech_chunk = speech[i*chunk_stride:(i+1)*chunk_stride]
-    is_final = i == total_chunk_num - 1
-    res = model.generate(input=speech_chunk, cache=cache, is_final=is_final, chunk_size=chunk_size)
-    if len(res[0]["value"]):
-        print(res)
+<a name="性能评测"></a>
+
+## 性能评测
+
+> 184 条长音频（共 192 分钟）。[完整报告 →](https://modelscope.github.io/FunASR/zh/benchmark.html)
+
+| 模型 | 中文 CER ↓ | GPU 速度 | CPU 速度 | 对比 Whisper-large-v3 |
+|------|------|----------|----------|---------------------|
+| **Fun-ASR-Nano**（vLLM） | **8.20%** | **340 倍**实时 | — | 🚀 **快 26 倍** |
+| **SenseVoice-Small** | **7.81%** | **170 倍**实时 | **17 倍**实时 | 🚀 **快 13 倍** |
+| **Paraformer-Large** | 10.18% | **120 倍**实时 | **15 倍**实时 | 🚀 **快 9 倍** |
+| Whisper-large-v3-turbo | 21.71% | 46 倍实时 | ❌ | 快 3.4 倍 |
+| Whisper-large-v3 | 20.02% | 13 倍实时 | ❌ | 基准 |
+
+> **一句话：** FunASR 在 CPU 上的速度，比 Whisper 在 GPU 上还快。
+
+---
+
+## 最新动态
+
+- **MOSS-Transcribe-Diarize** 已接入 FunASR 服务、Docker、Kubernetes、vLLM/SGLang 工作流和 FunClip，一次完成长音频转写、时间戳与匿名说话人标注。[部署 MOSS ->](./docs/moss_transcribe_diarize_zh.md)
+- **FunASR 1.4.12** 修复 Fun-ASR-Nano 使用 FP16 音频计算时的 vLLM 异常输出：Qwen3 解码器改用 BF16，不支持 BF16 的 GPU 可显式选择 FP32。升级命令：`python -m pip install -U "funasr==1.4.12"`。[发布页 ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.12)
+- **工业部署** 新增更快、更稳定的实时服务，以及覆盖 Linux、macOS、Windows 十种目标的 llama.cpp 预编译包。[GPU 服务 ->](./docs/vllm_guide_zh.md) · [CPU/端侧包 ->](https://www.funasr.com/deploy/llama-cpp.html)
+
+> 完整改动记录和可下载资产请查看 [GitHub Releases](https://github.com/modelscope/FunASR/releases)。
+
+---
+
+## 安装
+
+```bash
+pip install funasr
 ```
 
-注：流式 VAD 模型输出格式为 4 种情况：
+<details><summary>从源码安装</summary>
 
-- `[[beg1, end1], [beg2, end2], .., [begN, endN]]`：同上离线 VAD 输出结果。
-- `[[beg, -1]]`：表示只检测到起始点。
-- `[[-1, end]]`：表示只检测到结束点。
-- `[]`：表示既没有检测到起始点，也没有检测到结束点
-  输出结果单位为毫秒，从起始点开始的绝对时间。
-
-### 标点恢复
-
-```python
-from funasr import AutoModel
-
-model = AutoModel(model="ct-punc")
-
-res = model.generate(input="那今天的会就到这里吧 happy new year 明年见")
-print(res)
+```bash
+git clone https://github.com/modelscope/FunASR.git && cd FunASR
+pip install -e ./
 ```
-
-### 时间戳预测
-
-```python
-from funasr import AutoModel
-
-model = AutoModel(model="fa-zh")
-
-wav_file = f"{model.model_path}/example/asr_example.wav"
-text_file = f"{model.model_path}/example/text.txt"
-res = model.generate(input=(wav_file, text_file), data_type=("sound", "text"))
-print(res)
-```
-
-### 情感识别
-
-```python
-from funasr import AutoModel
-
-model = AutoModel(model="emotion2vec_plus_large")
-
-wav_file = f"{model.model_path}/example/test.wav"
-
-res = model.generate(wav_file, output_dir="./outputs", granularity="utterance", extract_embedding=False)
-print(res)
-```
-
-更详细（[教程文档](docs/tutorial/README_zh.md)），
-更多（[模型示例](https://github.com/alibaba-damo-academy/FunASR/tree/main/examples/industrial_data_pretraining)）
+环境要求：Python ≥ 3.8、PyTorch ≥ 1.13、torchaudio
 
 </details>
 
-## 导出 ONNX
+---
 
-### 从命令行导出
+<a name="模型列表"></a>
 
-```shell
-funasr-export ++model=paraformer ++quantize=false
-```
+## 模型列表
 
-### 从 Python 导出
+| 模型 | 任务 | 语言 | 参数量 | 链接 |
+|------|------|------|--------|------|
+| **Fun-ASR-Nano** | 识别 | 中/英/日 + 中文方言 | 800M | [⭐](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512) [🤗](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512) [GGUF](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF) |
+| **Fun-ASR-MLT-Nano** | 识别 | 31 种语言 | 800M | [⭐](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-MLT-Nano-2512) [🤗](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512) |
+| **SenseVoiceSmall** | 识别 + 情感 + 事件 | 中/英/日/韩/粤 | 234M | [⭐](https://www.modelscope.cn/models/iic/SenseVoiceSmall) [🤗](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) [GGUF](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF) [论文](https://arxiv.org/abs/2407.04051) |
+| **Paraformer-zh** | 识别 + 时间戳 | 中/英 | 220M | [⭐](https://www.modelscope.cn/models/iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) [🤗](https://huggingface.co/funasr/paraformer-zh) |
+| Paraformer-zh-streaming | 流式识别 | 中/英 | 220M | [⭐](https://modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online/summary) [🤗](https://huggingface.co/funasr/paraformer-zh-streaming) |
+| Qwen3-ASR | 识别，52 种语言 | 多语言 | 1.7B | [使用](examples/industrial_data_pretraining/qwen3_asr) |
+| GLM-ASR-Nano | 识别，17 种语言 | 多语言 | 1.5B | [使用](examples/industrial_data_pretraining/glm_asr) |
+| Whisper-large-v3 | 识别 + 翻译 | 多语言 | 1550M | [使用](examples/industrial_data_pretraining/whisper) |
+| Whisper-large-v3-turbo | 识别 + 翻译 | 多语言 | 809M | [使用](examples/industrial_data_pretraining/whisper) |
+| ct-punc | 标点恢复 | 中/英 | 290M | [⭐](https://modelscope.cn/models/iic/punc_ct-transformer_cn-en-common-vocab471067-large/summary) [🤗](https://huggingface.co/funasr/ct-punc) |
+| fsmn-vad | 语音检测 | 中/英 | 0.4M | [⭐](https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/summary) [🤗](https://huggingface.co/funasr/fsmn-vad) |
+| cam++ | 说话人分离 | — | 7.2M | [⭐](https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common/summary) [🤗](https://huggingface.co/funasr/campplus) |
+| emotion2vec+large | 情感识别 | — | 300M | [⭐](https://modelscope.cn/models/iic/emotion2vec_plus_large/summary) [🤗](https://huggingface.co/emotion2vec/emotion2vec_plus_large) |
+
+---
+
+## 使用示例
+
+> 完整参数文档：[教程 →](https://modelscope.github.io/FunASR/zh/tutorial.html)
 
 ```python
 from funasr import AutoModel
 
-model = AutoModel(model="paraformer")
+# 中文生产级（VAD + 识别 + 标点 + 说话人）
+model = AutoModel(model="paraformer-zh", vad_model="fsmn-vad", punc_model="ct-punc", spk_model="cam++", device="cuda")
+result = model.generate(input="https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav", hotword="关键词 20")
 
-res = model.export(quantize=False)
+# 使用 Silero VAD（先安装：python -m pip install "funasr[silero]"）
+model = AutoModel(
+    model="paraformer-zh", vad_model="silero-vad", device="cpu",
+    vad_kwargs={"silero_threshold": 0.5, "silero_min_silence_duration_ms": 100},
+)
+result = model.generate(input="audio.wav")
+
+# 中/英/日 + 中文方言
+model = AutoModel(model="FunAudioLLM/Fun-ASR-Nano-2512", hub="hf", trust_remote_code=True,
+                  vad_model="fsmn-vad", vad_kwargs={"max_single_segment_time": 30000}, device="cuda")
+result = model.generate(input="audio.wav", batch_size=1)
+
+# 流式实时识别(逐块喂音频)
+import soundfile as sf
+model = AutoModel(model="paraformer-zh-streaming", device="cuda")
+audio, sr = sf.read("speech.wav", dtype="float32")   # 16 kHz 单声道
+chunk_size = [0, 10, 5]                               # 每块 600ms
+chunk_stride = chunk_size[1] * 960
+cache = {}
+n_chunks = (len(audio) - 1) // chunk_stride + 1
+for i in range(n_chunks):
+    chunk = audio[i * chunk_stride : (i + 1) * chunk_stride]
+    res = model.generate(input=chunk, cache=cache, is_final=(i == n_chunks - 1),
+                         chunk_size=chunk_size, encoder_chunk_look_back=4, decoder_chunk_look_back=1)
+    if res[0]["text"]:
+        print(res[0]["text"], end="", flush=True)
+
+# 情感识别
+model = AutoModel(model="emotion2vec_plus_large", device="cuda")
+result = model.generate(input="audio.wav", granularity="utterance")
 ```
 
-### 测试 ONNX
+### 命令行工具（Agent 友好）
 
-```python
-# pip3 install -U funasr-onnx
-from pathlib import Path
-from runtime.python.onnxruntime.funasr_onnx.paraformer_bin import Paraformer
+```bash
+# 转写音频（最简用法）
+funasr audio.wav
 
+# JSON 输出（适合 AI Agent 调用）
+funasr audio.wav --output-format json
 
-home_dir = Path.home()
+# 生成 SRT 字幕
+funasr audio.wav --output-format srt --output-dir ./subs
 
-model_dir = "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
-model = Paraformer(model_dir, batch_size=1, quantize=True)
+# 说话人分离 + 时间戳
+funasr audio.wav --spk --timestamps -f json
 
-wav_path = [f"{home_dir}/.cache/modelscope/hub/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/example/asr_example.wav"]
+# 指定模型和语言
+funasr audio.wav --model paraformer --language zh
 
-result = model(wav_path)
-print(result)
+# 批量转写
+funasr *.wav --output-format srt --output-dir ./output
 ```
 
-更多例子请参考 [样例](runtime/python/onnxruntime)
+可用模型：`sensevoice`（默认）、`paraformer`、`paraformer-en`、`fun-asr-nano`
 
-<a name="服务部署"></a>
 
-## 服务部署
+---
 
-FunASR 支持预训练或者进一步微调的模型进行服务部署。目前支持以下几种服务部署：
+## 部署
 
-- 中文离线文件转写服务（CPU 版本），已完成
-- 中文流式语音识别服务（CPU 版本），已完成
-- 英文离线文件转写服务（CPU 版本），已完成
-- 中文离线文件转写服务（GPU 版本），进行中
-- 更多支持中
+```bash
+# OpenAI 兼容 API（推荐）
+pip install funasr fastapi uvicorn python-multipart
+funasr-server --model sensevoice --device cuda
+# → POST /v1/audio/transcriptions，地址 localhost:8000
+# 离线长音频联合转写 + 匿名说话人标签：
+funasr-server --model moss-transcribe-diarize --device cuda:0
+```
 
-详细信息可以参阅([服务部署文档](runtime/readme_cn.md))。
+[MOSS 服务、Docker、Kubernetes、vLLM、SGLang、LocalAI 与 FunClip 部署指南 →](./docs/moss_transcribe_diarize_zh.md)
 
-<a name="社区交流"></a>
+使用公开样例音频验证服务：
 
-## 联系我们
+```bash
+curl -L https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/BAC009S0764W0121.wav -o sample.wav
+curl http://localhost:8000/v1/audio/transcriptions \
+  -F file=@sample.wav \
+  -F model=sensevoice \
+  -F response_format=verbose_json
+```
 
-如果您在使用中遇到问题，可以直接在 github 页面提 Issues。欢迎语音兴趣爱好者扫描以下的钉钉群二维码加入社区群，进行交流和讨论。
+```bash
+# Docker 流式服务
+docker pull registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
+```
 
-|                               钉钉群                                |
-| :-----------------------------------------------------------------: |
-| <div align="left"><img src="docs/images/dingding.png" width="250"/> |
+### CPU / 边缘部署 - llama.cpp / GGUF（无需 GPU、无需 Python）
 
-## 社区贡献者
+在 CPU 和边缘设备上用单个自包含二进制运行 **SenseVoice / Paraformer / Fun-ASR-Nano**，无需 Python 运行环境，并内置 FSMN-VAD。
 
-| <div align="left"><img src="docs/images/alibaba.png" width="260"/> | <div align="left"><img src="docs/images/nwpu.png" width="260"/> | <img src="docs/images/China_Telecom.png" width="200"/> </div> | <img src="docs/images/RapidAI.png" width="200"/> </div> | <img src="docs/images/aihealthx.png" width="200"/> </div> | <img src="docs/images/XVERSE.png" width="250"/> </div> |
-| :----------------------------------------------------------------: | :-------------------------------------------------------------: | :-----------------------------------------------------------: | :-----------------------------------------------------: | :-------------------------------------------------------: | :----------------------------------------------------: |
+```bash
+# Linux / macOS：在解压后的发布目录中执行
+bash download-funasr-model.sh sensevoice ./gguf        # 也可使用 paraformer 或 nano
+./llama-funasr-sensevoice -m ./gguf/sensevoice-small-q8.gguf --vad ./gguf/fsmn-vad.gguf -a audio.wav
+# -> 欢迎大家来体验达摩院推出的语音识别模型
+```
 
-贡献者名单请参考（[致谢名单](./Acknowledge.md)）
+```powershell
+# Windows PowerShell：在解压根目录执行（需已安装 `hf` CLI）
+hf download FunAudioLLM/SenseVoiceSmall-GGUF sensevoice-small-q8.gguf --local-dir .\gguf
+hf download FunAudioLLM/fsmn-vad-GGUF fsmn-vad.gguf --local-dir .\gguf
+.\llama-funasr-sensevoice.exe -m .\gguf\sensevoice-small-q8.gguf --vad .\gguf\fsmn-vad.gguf -a audio.wav
+# 使用 windows-x64-vulkan 包，并安装 AMD、Intel 或 NVIDIA 的当前 Vulkan 显卡驱动：
+.\llama-funasr-sensevoice.exe -m .\gguf\sensevoice-small-q8.gguf --vad .\gguf\fsmn-vad.gguf -a audio.wav --backend vulkan
+# RTX 30 系列等架构 86 GPU 可使用 windows-x64-cuda 包：
+.\llama-funasr-sensevoice.exe -m .\gguf\sensevoice-small-q8.gguf --vad .\gguf\fsmn-vad.gguf -a audio.wav --backend cuda
+```
 
-## 许可协议
+Linux GPU 用户可下载 `funasr-llamacpp-linux-x64-vulkan.tar.gz`，在已安装可用
+Vulkan driver/ICD 的机器上运行：
 
-项目遵循[The MIT License](https://opensource.org/licenses/MIT)开源协议，模型许可协议请参考（[模型协议](./MODEL_LICENSE)）
+```bash
+./llama-funasr-sensevoice -m ./gguf/sensevoice-small-q8.gguf --vad ./gguf/fsmn-vad.gguf -a audio.wav --backend vulkan
+```
 
-## 论文引用
+Windows Vulkan ZIP 使用显卡驱动提供的系统 Vulkan loader，不需要另外安装 Vulkan SDK；当前与 Linux Vulkan 包一样，仅加速 SenseVoiceSmall。
+
+带 tag 的发布提供两个 Windows CUDA 包：标准 `windows-x64-cuda` ZIP 面向 CUDA
+architecture 86，`windows-x64-cuda-blackwell` 面向 RTX 50 / Blackwell 的 architecture
+120（`sm_120`）。两个 ZIP 都包含所需的 cuBLAS DLL，并使用静态 MSVC runtime；用户只需
+安装兼容的 NVIDIA 驱动，无需另装 CUDA Toolkit。CI 验证架构与打包边界，但不代表已经在
+Blackwell 实机上完成推理验证。
+
+**预编译二进制：** [Releases](https://github.com/modelscope/FunASR/releases) · [v0.2.6](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.6) · [Linux Vulkan tarball](https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.2.6/funasr-llamacpp-linux-x64-vulkan.tar.gz) · [Windows Vulkan zip](https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.2.6/funasr-llamacpp-windows-x64-vulkan.zip) · [Windows CUDA zip](https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.2.6/funasr-llamacpp-windows-x64-cuda.zip) · [Windows Blackwell CUDA zip](https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.2.6/funasr-llamacpp-windows-x64-cuda-blackwell.zip) · **下载与快速开始：** [funasr.com/deploy/llama-cpp](https://www.funasr.com/deploy/llama-cpp.html) · **GGUF 模型：** [Hugging Face](https://huggingface.co/FunAudioLLM) · **文档与评测：** [runtime/llama.cpp/](./runtime/llama.cpp/)
+
+[OpenAI API 示例 →](./examples/openai_api/README_zh.md) · [Gradio Demo →](./examples/openai_api/GRADIO_zh.md) · [客户端配方 →](./examples/openai_api/CLIENTS.md) · [JavaScript/TypeScript 配方 →](./examples/openai_api/JAVASCRIPT_zh.md) · [Kubernetes 模板 →](./examples/openai_api/kubernetes/README_zh.md) · [工作流配方 →](./examples/openai_api/WORKFLOWS_zh.md) · [Postman 集合 →](./examples/openai_api/POSTMAN_zh.md) · [OpenAPI 规范 →](./examples/openai_api/OPENAPI_zh.md) · [安全指南 →](./examples/openai_api/SECURITY_zh.md) · [部署选型 →](./docs/deployment_matrix_zh.md) · [部署文档 →](./runtime/readme_cn.md) · [Agent 集成 →](https://modelscope.github.io/FunASR/agent.html)
+
+---
+
+## 社区
+
+|  |  |
+|---|---|
+| 📖 [文档](https://modelscope.github.io/FunASR/zh/) | 🐛 [问题反馈](https://github.com/modelscope/FunASR/issues) |
+| 💬 [讨论](https://github.com/modelscope/FunASR/discussions) | 🤗 [HuggingFace](https://huggingface.co/funasr) |
+| 🤝 [贡献指南](./CONTRIBUTING.md) | 📈 [20k 增长计划](./docs/community_growth_20k.md) |
+| 🗺️ [仓库职责与路线图](./docs/repository_roles_zh.md) | 🌐 [funasr.com](https://www.funasr.com) |
+| 🧩 [社区集成](./docs/community_projects_zh.md) | 💡 [使用案例](./docs/use_case_showcase_zh.md) |
+
+## Star 趋势
+
+<a href="https://star-history.com/#modelscope/FunASR&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=modelscope/FunASR&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=modelscope/FunASR&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=modelscope/FunASR&type=Date" width="600" />
+ </picture>
+</a>
+
+## 许可证
+
+- 本仓库的 FunASR 工具箱源码：[MIT License](./LICENSE)。
+- 预训练模型权重单独授权，请以各模型卡标注的协议为准；模型卡若链接本仓库的 [FunASR 模型开源协议](./MODEL_LICENSE)，则适用该协议。
+
+## 引用
 
 ```bibtex
 @inproceedings{gao2023funasr,
-  author={Zhifu Gao and Zerui Li and Jiaming Wang and Haoneng Luo and Xian Shi and Mengzhe Chen and Yabin Li and Lingyun Zuo and Zhihao Du and Zhangyu Xiao and Shiliang Zhang},
+  author={Zhifu Gao and others},
   title={FunASR: A Fundamental End-to-End Speech Recognition Toolkit},
-  year={2023},
   booktitle={INTERSPEECH},
-}
-@inproceedings{An2023bat,
-  author={Keyu An and Xian Shi and Shiliang Zhang},
-  title={BAT: Boundary aware transducer for memory-efficient and low-latency ASR},
-  year={2023},
-  booktitle={INTERSPEECH},
-}
-@inproceedings{gao22b_interspeech,
-  author={Zhifu Gao and ShiLiang Zhang and Ian McLoughlin and Zhijie Yan},
-  title={{Paraformer: Fast and Accurate Parallel Transformer for Non-autoregressive End-to-End Speech Recognition}},
-  year=2022,
-  booktitle={Proc. Interspeech 2022},
-  pages={2063--2067},
-  doi={10.21437/Interspeech.2022-9996}
-}
-@article{shi2023seaco,
-  author={Xian Shi and Yexin Yang and Zerui Li and Yanni Chen and Zhifu Gao and Shiliang Zhang},
-  title={{SeACo-Paraformer: A Non-Autoregressive ASR System with Flexible and Effective Hotword Customization Ability}},
-  year=2023,
-  journal={arXiv preprint arXiv:2308.03266(accepted by ICASSP2024)},
+  year={2023}
 }
 ```

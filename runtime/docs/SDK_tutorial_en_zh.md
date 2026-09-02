@@ -17,7 +17,7 @@ FunASR提供可便捷本地或者云端服务器部署的离线文件转写服�
 
 详细性能测试报告（[点击此处](./benchmark_onnx_cpp.md)）
 
-云服务厂商，针对新用户，有3个月免费试用活动，申请教程（[点击此处](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/aliyun_server_tutorial.md)）
+云服务厂商，针对新用户，有3个月免费试用活动，申请教程（[点击此处](https://github.com/modelscope/FunASR/blob/main/runtime/docs/aliyun_server_tutorial.md)）
 
 ## 快速上手
 
@@ -28,7 +28,7 @@ FunASR提供可便捷本地或者云端服务器部署的离线文件转写服�
 下载部署工具`funasr-runtime-deploy-offline-cpu-en.sh`
 
 ```shell
-curl -O https://raw.githubusercontent.com/alibaba-damo-academy/FunASR/main/runtime/deploy_tools/funasr-runtime-deploy-offline-cpu-en.sh;
+curl -O https://raw.githubusercontent.com/modelscope/FunASR/main/runtime/deploy_tools/funasr-runtime-deploy-offline-cpu-en.sh;
 # 如遇到网络问题，中国大陆用户，可以使用下面的命令：
 # curl -O https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/shell/funasr-runtime-deploy-offline-cpu-en.sh;
 ```

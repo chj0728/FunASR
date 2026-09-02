@@ -6,7 +6,7 @@
 import time
 import copy
 import torch
-from torch.cuda.amp import autocast
+from funasr.utils.amp import autocast
 from typing import Union, Dict, List, Tuple, Optional
 
 from funasr.register import tables
@@ -23,10 +23,13 @@ from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 
 @tables.register("model_classes", "MonotonicAligner")
 class MonotonicAligner(torch.nn.Module):
-    """
-    Author: Speech Lab of DAMO Academy, Alibaba Group
-    Achieving timestamp prediction while recognizing with non-autoregressive end-to-end ASR model
-    https://arxiv.org/abs/2301.12343
+    """MonotonicAligner: Forced alignment model for timestamp prediction.
+
+    Given audio and text, computes character-level time alignments
+    using monotonic attention constraint.
+
+    Usage: model.generate(input=(audio_path, text_path), data_type=("sound", "text"))
+    Output: {"key": str, "timestamp": [[start_ms, end_ms], ...], "text": str}
     """
 
     def __init__(
@@ -44,6 +47,22 @@ class MonotonicAligner(torch.nn.Module):
         length_normalized_loss: bool = False,
         **kwargs,
     ):
+        """Initialize MonotonicAligner.
+        
+            Args:
+                input_size: Size/dimension parameter.
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                encoder: TODO.
+                encoder_conf: Configuration dict for encoder.
+                predictor: TODO.
+                predictor_conf: Configuration dict for predictor.
+                predictor_bias: TODO.
+                length_normalized_loss: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         if specaug is not None:
@@ -116,6 +135,13 @@ class MonotonicAligner(torch.nn.Module):
         return loss, stats, weight
 
     def calc_predictor_timestamp(self, encoder_out, encoder_out_lens, token_num):
+        """Calc predictor timestamp.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                token_num: TODO.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -162,6 +188,16 @@ class MonotonicAligner(torch.nn.Module):
         frontend=None,
         **kwargs,
     ):
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         meta_data = {}
         # extract fbank feats
         time1 = time.perf_counter()

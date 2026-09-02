@@ -1,6 +1,6 @@
 (简体中文|[English](./README.md))
 
-FunASR开源了大量在工业数据上预训练模型，您可以在 [模型许可协议](https://github.com/alibaba-damo-academy/FunASR/blob/main/MODEL_LICENSE)下自由使用、复制、修改和分享FunASR模型，下面列举代表性的模型，更多模型请参考 [模型仓库](https://github.com/alibaba-damo-academy/FunASR/tree/main/model_zoo)。
+FunASR开源了大量在工业数据上预训练模型，您可以在 [模型许可协议](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)下自由使用、复制、修改和分享FunASR模型，下面列举代表性的模型，更多模型请参考 [模型仓库](https://github.com/modelscope/FunASR/tree/main/model_zoo)。
 
 <div align="center">  
 <h4>
@@ -15,6 +15,8 @@ FunASR开源了大量在工业数据上预训练模型，您可以在 [模型许
 ## 模型推理
 
 ### 快速使用
+
+不想先配置本地环境？可以先跑 [Colab 快速体验](../../examples/colab/README_zh.md)，确认模型和输出格式后再切到命令行。
 
 命令行方式调用：
 ```shell
@@ -38,7 +40,7 @@ print(res)
 ```python
 model = AutoModel(model=[str], device=[str], ncpu=[int], output_dir=[str], batch_size=[int], hub=[str], **kwargs)
 ```
-- `model`(str): [模型仓库](https://github.com/alibaba-damo-academy/FunASR/tree/main/model_zoo) 中的模型名称，或本地磁盘中的模型路径
+- `model`(str): [模型仓库](https://github.com/modelscope/FunASR/tree/main/model_zoo) 中的模型名称，或本地磁盘中的模型路径
 - `device`(str): `cuda:0`（默认gpu0），使用 GPU 进行推理，指定。如果为`cpu`，则使用 CPU 进行推理。`mps`：mac电脑M系列新品试用mps进行推理。`xpu`：使用英特尔gpu进行推理。
 - `ncpu`(int): `4` （默认），设置用于 CPU 内部操作并行性的线程数
 - `output_dir`(str): `None` （默认），如果设置，输出结果的输出路径
@@ -85,6 +87,31 @@ wav_file = f"{model.model_path}/example/asr_example.wav"
 res = model.generate(input=wav_file, batch_size_s=300, batch_size_threshold_s=60, hotword='魔搭')
 print(res)
 ```
+
+#### ASR 后处理热词替换
+
+模型层 `hotword` / `hotwords` 用于在解码阶段提升少量高优先级词的识别率；如果词表很大（例如几千个股票名），更适合在识别完成后做文本级纠错：
+
+```python
+from funasr import AutoModel
+
+model = AutoModel(model="paraformer-zh", vad_model="fsmn-vad", punc_model="ct-punc")
+
+res = model.generate(
+    input="asr_example.wav",
+    postprocess_hotwords={
+        "科大迅飞": "科大讯飞",
+        "东方财富": "东方财富",
+    },
+    postprocess_hotword_threshold=0.85,
+    return_postprocess_hotword_matches=True,
+)
+print(res[0]["text"])
+print(res[0].get("postprocess_hotword_matches"))
+```
+
+也支持热词文件 `postprocess_hotword_file`，每行一个目标词，或一行一个显式映射（`错误词=>目标词`）。模糊匹配需要额外安装 `pypinyin` 和 `rapidfuzz`；未安装时仍可使用显式映射。
+
 注意：
 - 通常模型输入限制时长30s以下，组合`vad_model`后，支持任意时长音频输入，不局限于paraformer模型，所有音频输入模型均可以。
 - `model`相关的参数可以直接在`AutoModel`定义中直接指定；与`vad_model`相关参数可以通过`vad_kwargs`来指定，类型为dict；类似的有`punc_kwargs`，`spk_kwargs`；
@@ -116,7 +143,7 @@ speech, sample_rate = soundfile.read(wav_file)
 chunk_stride = chunk_size[1] * 960 # 600ms
 
 cache = {}
-total_chunk_num = int(len((speech)-1)/chunk_stride+1)
+total_chunk_num = int((len(speech)-1)/chunk_stride+1)
 for i in range(total_chunk_num):
     speech_chunk = speech[i*chunk_stride:(i+1)*chunk_stride]
     is_final = i == total_chunk_num - 1
@@ -153,7 +180,7 @@ speech, sample_rate = soundfile.read(wav_file)
 chunk_stride = int(chunk_size * sample_rate / 1000)
 
 cache = {}
-total_chunk_num = int(len((speech)-1)/chunk_stride+1)
+total_chunk_num = int((len(speech)-1)/chunk_stride+1)
 for i in range(total_chunk_num):
     speech_chunk = speech[i*chunk_stride:(i+1)*chunk_stride]
     is_final = i == total_chunk_num - 1
@@ -189,7 +216,71 @@ text_file = f"{model.model_path}/example/text.txt"
 res = model.generate(input=(wav_file, text_file), data_type=("sound", "text"))
 print(res)
 ```
-更多（[示例](https://github.com/alibaba-damo-academy/FunASR/tree/main/examples/industrial_data_pretraining)）
+更多（[示例](https://github.com/modelscope/FunASR/tree/main/examples/industrial_data_pretraining)）
+
+#### 说话人确认/分割 (ERes2NetV2)
+```python
+from funasr import AutoModel
+
+# 单独提取说话人 embedding
+model = AutoModel(model="iic/speech_eres2netv2_sv_zh-cn_16k-common", device="cuda:0")
+res = model.generate(input="audio.wav")
+embedding = res[0]["spk_embedding"]  # shape: [1, 192]
+```
+
+```python
+from funasr import AutoModel
+
+# ASR + 说话人分割
+model = AutoModel(
+    model="paraformer-zh",
+    vad_model="fsmn-vad",
+    vad_kwargs={"max_single_segment_time": 60000},
+    punc_model="ct-punc",
+    spk_model="iic/speech_eres2netv2_sv_zh-cn_16k-common",
+    device="cuda:0",
+)
+res = model.generate(input="meeting.wav", batch_size_s=300)
+for sentence in res:
+    print(f"[说话人 {sentence['spk']}] {sentence['text']}")
+```
+注：`spk_model` 也可以使用 `"cam++"` (CAM++ 模型)。ERes2NetV2 在短时说话人特征提取方面有所改进。
+自定义 `spk_model` 可以传 ModelScope 模型 ID 或本地模型路径；模型需要能通过 FunASR `AutoModel` 加载，并在自身 `inference()` 方法中返回 `spk_embedding`，用户侧仍调用 `AutoModel.generate()`。后续说话人聚类会使用这些 embedding 分配 `spk` 标签。
+
+#### 多语言语音识别 (Qwen3-ASR)
+```python
+from funasr import AutoModel
+
+# Qwen3-ASR 支持52种语言自动语言检测
+# hub="hf" 从 HuggingFace 下载，默认 hub="ms" 从 ModelScope 下载
+model = AutoModel(model="Qwen/Qwen3-ASR-1.7B", hub="hf", device="cuda:0")
+
+# 指定语言
+res = model.generate(input="audio_zh.wav", language="Chinese")
+print(res[0]["text"])
+
+# 自动语言检测
+res = model.generate(input="audio.wav")
+print(res[0]["text"], res[0].get("language", ""))
+```
+注：请使用 `pip install -U "qwen-asr==0.0.6" "transformers==4.57.6" accelerate`。`qwen-asr==0.0.6` 锁定 `transformers==4.57.6`；若环境中混入不兼容的新版 Transformers，可能触发嵌套 `thinker_config` 报错。支持 0.6B 和 1.7B 两种模型规格。
+
+#### 多语言语音识别 (GLM-ASR)
+```python
+from funasr import AutoModel
+
+# GLM-ASR-Nano 支持17种语言，方言及低音量语音优化
+# hub="hf" 从 HuggingFace 下载，默认 hub="ms" 从 ModelScope 下载
+model = AutoModel(model="zai-org/GLM-ASR-Nano-2512", hub="hf", device="cuda:0")
+res = model.generate(input="audio.wav")
+print(res[0]["text"])
+
+# ModelScope（国内用户）
+model = AutoModel(model="ZhipuAI/GLM-ASR-Nano-2512", hub="ms", device="cuda:0")
+```
+注：需要 `transformers>=5.0.0`（从源码安装：`pip install git+https://github.com/huggingface/transformers`）。
+
+
 
 <a name="核心功能"></a>
 ## 模型训练与测试
@@ -208,7 +299,7 @@ cd examples/industrial_data_pretraining/paraformer
 bash finetune.sh
 # "log_file: ./outputs/log.txt"
 ```
-详细完整的脚本参考 [finetune.sh](https://github.com/alibaba-damo-academy/FunASR/blob/main/examples/industrial_data_pretraining/paraformer/finetune.sh)
+详细完整的脚本参考 [finetune.sh](https://github.com/modelscope/FunASR/blob/main/examples/industrial_data_pretraining/paraformer/finetune.sh)
 
 ### 详细参数介绍
 
@@ -232,8 +323,8 @@ funasr/bin/train_ds.py \
 ```
 
 - `model`（str）：模型名字（模型仓库中的ID），此时脚本会自动下载模型到本地；或者本地已经下载好的模型路径。
-- `train_data_set_list`（str）：训练数据路径，默认为jsonl格式，具体参考（[例子](https://github.com/alibaba-damo-academy/FunASR/blob/main/data/list)）。
-- `valid_data_set_list`（str）：验证数据路径，默认为jsonl格式，具体参考（[例子](https://github.com/alibaba-damo-academy/FunASR/blob/main/data/list)）。
+- `train_data_set_list`（str）：训练数据路径，默认为jsonl格式，具体参考（[例子](https://github.com/modelscope/FunASR/blob/main/data/list)）。
+- `valid_data_set_list`（str）：验证数据路径，默认为jsonl格式，具体参考（[例子](https://github.com/modelscope/FunASR/blob/main/data/list)）。
 - `dataset_conf.batch_type`（str）：`example`（默认），batch的类型。`example`表示按照固定数目batch_size个样本组batch；`length` or `token` 表示动态组batch，batch总长度或者token数为batch_size。
 - `dataset_conf.batch_size`（int）：与 `batch_type` 搭配使用，当 `batch_type=example` 时，表示样本个数；当 `batch_type=length` 时，表示样本中长度，单位为fbank帧数（1帧10ms）或者文字token个数。
 - `train_conf.max_epoch`（int）：`100`（默认），训练总epoch数。
@@ -285,7 +376,7 @@ torchrun --nnodes 2 --node_rank 1 --nproc_per_node ${gpu_num} --master_addr 192.
 
 #### 准备数据
 
-`jsonl`格式可以参考（[例子](https://github.com/alibaba-damo-academy/FunASR/blob/main/data/list)）。
+`jsonl`格式可以参考（[例子](https://github.com/modelscope/FunASR/blob/main/data/list)）。
 可以用指令 `scp2jsonl` 从wav.scp与text.txt生成。wav.scp与text.txt准备过程如下：
 
 `train_text.txt`
@@ -379,7 +470,7 @@ tensorboard --logdir /xxxx/FunASR/examples/industrial_data_pretraining/paraforme
 
 #### 有configuration.json
 
-假定，训练模型路径为：./model_dir，如果该目录下有生成configuration.json，只需要将 [上述模型推理方法](https://github.com/alibaba-damo-academy/FunASR/blob/main/examples/README_zh.md#%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86) 中模型名字修改为模型路径即可
+假定，训练模型路径为：./model_dir，如果该目录下有生成configuration.json，只需要将 [上述模型推理方法](https://github.com/modelscope/FunASR/blob/main/examples/README_zh.md#%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86) 中模型名字修改为模型路径即可
 
 例如：
 
@@ -421,7 +512,7 @@ python -m funasr.bin.inference \
 - `tokenizer_conf.token_list`：词表文件路径，一般在 `config.yaml` 有指定，无需再手动指定，当 `config.yaml` 中路径不正确时，需要在此处手动指定。
 - `frontend_conf.cmvn_file`：wav提取fbank中用到的cmvn文件，一般在 `config.yaml` 有指定，无需再手动指定，当 `config.yaml` 中路径不正确时，需要在此处手动指定。
 
-其他参数同上，完整 [示例](https://github.com/alibaba-damo-academy/FunASR/blob/main/examples/industrial_data_pretraining/paraformer/infer_from_local.sh)
+其他参数同上，完整 [示例](https://github.com/modelscope/FunASR/blob/main/examples/industrial_data_pretraining/paraformer/infer_from_local.sh)
 
 
 <a name="模型导出与测试"></a>
@@ -459,7 +550,7 @@ result = model(wav_path)
 print(result)
 ```
 
-更多例子请参考 [样例](https://github.com/alibaba-damo-academy/FunASR/tree/main/runtime/python/onnxruntime)
+更多例子请参考 [样例](https://github.com/modelscope/FunASR/tree/main/runtime/python/onnxruntime)
 
 <a name="新模型注册教程"></a>
 ## 新模型注册教程

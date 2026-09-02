@@ -31,7 +31,22 @@ from funasr.register import tables
 @tables.register("model_classes", "Whisper-large-v3-turbo")
 @tables.register("model_classes", "WhisperWarp")
 class WhisperWarp(nn.Module):
+    """Whisper: OpenAI Whisper model integration.
+
+    Wraps Whisper for multilingual speech recognition and translation
+    within FunASR's AutoModel interface.
+
+    Supports: whisper-tiny through whisper-large-v3-turbo.
+    Output: {"key": str, "text": str}
+    """
+
     def __init__(self, *args, **kwargs):
+        """Initialize WhisperWarp.
+        
+            Args:
+                *args: Variable positional arguments.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         hub = kwargs.get("hub", "funasr")
         if hub == "openai":
@@ -50,8 +65,48 @@ class WhisperWarp(nn.Module):
 
     def forward(
         self,
+        speech: torch.Tensor = None,
+        speech_lengths: torch.Tensor = None,
+        text: torch.Tensor = None,
+        text_lengths: torch.Tensor = None,
+        **kwargs,
     ):
-        pass
+        """Forward pass for training. Computes cross-entropy loss.
+
+        Args:
+            speech: (B, T, D) mel-spectrogram features
+            speech_lengths: (B,) lengths of each audio
+            text: (B, U) token IDs (with SOT/EOT tokens)
+            text_lengths: (B,) lengths of each text sequence
+        Returns:
+            dict with "loss" and optionally "stats"
+        """
+        if speech is None or text is None:
+            raise ValueError("forward() requires speech and text for training")
+
+        # Encoder
+        audio_features = self.model.encoder(speech)
+
+        # Decoder: shift text right for teacher forcing
+        # text format: [SOT, lang, task, ..., tokens, EOT]
+        decoder_input = text[:, :-1]
+        decoder_target = text[:, 1:]
+
+        # Decoder forward
+        logits = self.model.decoder(decoder_input, audio_features)
+
+        # Cross-entropy loss (ignore padding, token_id = -1 or pad)
+        loss = F.cross_entropy(
+            logits.reshape(-1, logits.size(-1)),
+            decoder_target.reshape(-1),
+            ignore_index=-100,
+        )
+
+        stats = {
+            "loss": loss.detach().item(),
+            "batch_size": speech.size(0),
+        }
+        return {"loss": loss, "stats": stats}
 
     def inference(
         self,
@@ -62,6 +117,16 @@ class WhisperWarp(nn.Module):
         frontend=None,
         **kwargs,
     ):
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         if kwargs.get("batch_size", 1) > 1:
             raise NotImplementedError("batch decoding is not implemented")
 

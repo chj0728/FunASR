@@ -41,7 +41,7 @@ SenseVoiceは、音声認識（ASR）、言語識別（LID）、音声感情認�
 # 最新情報 🔥
 - 2024/7：新しく[ONNX](./demo_onnx.py)と[libtorch](./demo_libtorch.py)のエクスポート機能を追加し、Pythonバージョンのランタイム：[funasr-onnx-0.4.0](https://pypi.org/project/funasr-onnx/)、[funasr-torch-0.1.1](https://pypi.org/project/funasr-torch/)も提供開始。
 - 2024/7: [SenseVoice-Small](https://www.modelscope.cn/models/iic/SenseVoiceSmall) 多言語音声理解モデルがオープンソース化されました。中国語、広東語、英語、日本語、韓国語の多言語音声認識、感情認識、およびイベント検出能力をサポートし、非常に低い推論遅延を実現しています。
-- 2024/7: CosyVoiceは自然な音声生成に取り組んでおり、多言語、音色、感情制御をサポートします。多言語音声生成、ゼロショット音声生成、クロスランゲージ音声クローン、および指示に従う能力に優れています。[CosyVoice repo](https://github.com/FunAudioLLM/CosyVoice) and [CosyVoice オンライン体験](https://www.modelscope.cn/studios/iic/CosyVoice-300M).
+- 2024/7: CosyVoiceは自然な音声生成に取り組んでおり、多言語、音色、感情制御をサポートします。多言語音声生成、ゼロショット音声生成、クロスランゲージ音声クローン、および指示に従う能力に優れています。[CosyVoice repo](https://github.com/QwenAudio/CosyVoice) and [CosyVoice オンライン体験](https://www.modelscope.cn/studios/iic/CosyVoice-300M).
 - 2024/7: [FunASR](https://github.com/modelscope/FunASR) は、音声認識（ASR）、音声活動検出（VAD）、句読点復元、言語モデル、話者検証、話者分離、およびマルチトーカーASRなどの機能を提供する基本的な音声認識ツールキットです。
 
 <a name="Benchmarks"></a>
@@ -243,7 +243,7 @@ fastapi run --port 50000
 ### トレーニング環境のインストール
 
 ```shell
-git clone https://github.com/alibaba/FunASR.git && cd FunASR
+git clone https://github.com/modelscope/FunASR.git && cd FunASR
 pip3 install -e ./
 ```
 

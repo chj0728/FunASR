@@ -4,7 +4,7 @@ from typing import Union, Dict, List, Tuple, Optional
 import time
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
+from funasr.utils.amp import autocast
 
 from funasr.losses.label_smoothing_loss import LabelSmoothingLoss
 from funasr.models.ctc.ctc import CTC
@@ -13,6 +13,7 @@ from funasr.metrics.compute_acc import th_accuracy
 
 # from funasr.models.e2e_asr_common import ErrorCalculator
 from funasr.train_utils.device_funcs import force_gatherable
+from funasr.losses.cr_ctc import cr_ctc_loss
 from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 from funasr.utils import postprocess_utils
 from funasr.utils.datadir_writer import DatadirWriter
@@ -21,7 +22,17 @@ from funasr.register import tables
 
 @tables.register("model_classes", "Transformer")
 class Transformer(nn.Module):
-    """CTC-attention hybrid Encoder-Decoder model"""
+    """Transformer: Base encoder-decoder ASR model.
+
+    Standard CTC-attention hybrid architecture with:
+    - Encoder (self-attention + position encoding)
+    - CTC branch for auxiliary loss
+    - Attention decoder for sequence generation
+    - Beam search with LM fusion
+
+    Base class for Conformer, Branchformer, etc.
+    Output: {"key": str, "text": str}
+    """
 
     def __init__(
         self,
@@ -56,6 +67,36 @@ class Transformer(nn.Module):
         **kwargs,
     ):
 
+        """Initialize Transformer.
+        
+            Args:
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                encoder: TODO.
+                encoder_conf: Configuration dict for encoder.
+                decoder: TODO.
+                decoder_conf: Configuration dict for decoder.
+                ctc: TODO.
+                ctc_conf: Configuration dict for ctc.
+                ctc_weight: TODO.
+                interctc_weight: TODO.
+                input_size: Size/dimension parameter.
+                vocab_size: Size/dimension parameter.
+                ignore_id: TODO.
+                blank_id: TODO.
+                sos: TODO.
+                eos: TODO.
+                lsm_weight: TODO.
+                length_normalized_loss: TODO.
+                report_cer: TODO.
+                report_wer: TODO.
+                sym_space: TODO.
+                sym_blank: TODO.
+                share_embedding: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         if specaug is not None:
@@ -87,6 +128,7 @@ class Transformer(nn.Module):
         self.vocab_size = vocab_size
         self.ignore_id = ignore_id
         self.ctc_weight = ctc_weight
+        self.cr_ctc_weight = kwargs.get("cr_ctc_weight", 0.0)
         self.specaug = specaug
         self.normalize = normalize
         self.encoder = encoder
@@ -195,6 +237,22 @@ class Transformer(nn.Module):
             # calculate whole encoder loss
             loss_ctc = (1 - self.interctc_weight) * loss_ctc + self.interctc_weight * loss_interctc
 
+        # CR-CTC: consistency regularization
+        loss_cr_ctc = None
+        if self.cr_ctc_weight > 0.0 and self.training and self.ctc_weight != 0.0:
+            # Second forward pass WITHOUT SpecAug
+            specaug_backup = self.specaug
+            self.specaug = None
+            encoder_out_clean, encoder_out_lens_clean = self.encode(speech, speech_lengths)
+            self.specaug = specaug_backup
+            if isinstance(encoder_out_clean, tuple):
+                encoder_out_clean = encoder_out_clean[0]
+            # Compute CTC log probs for both augmented and clean
+            ctc_logprobs_aug = self.ctc.log_softmax(encoder_out)
+            ctc_logprobs_clean = self.ctc.log_softmax(encoder_out_clean).detach()
+            loss_cr_ctc = cr_ctc_loss(ctc_logprobs_aug, ctc_logprobs_clean, encoder_out_lens)
+            stats["loss_cr_ctc"] = loss_cr_ctc.detach()
+
         # decoder: Attention decoder branch
         loss_att, acc_att, cer_att, wer_att = self._calc_att_loss(
             encoder_out, encoder_out_lens, text, text_lengths
@@ -207,6 +265,10 @@ class Transformer(nn.Module):
             loss = loss_ctc
         else:
             loss = self.ctc_weight * loss_ctc + (1 - self.ctc_weight) * loss_att
+
+        # Add CR-CTC loss
+        if loss_cr_ctc is not None:
+            loss = loss + self.cr_ctc_weight * loss_cr_ctc
 
         # Collect Attn branch stats
         stats["loss_att"] = loss_att.detach() if loss_att is not None else None
@@ -269,6 +331,14 @@ class Transformer(nn.Module):
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
     ):
+        """Internal: calc att loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
         ys_in_lens = ys_pad_lens + 1
 
@@ -300,6 +370,14 @@ class Transformer(nn.Module):
         ys_pad_lens: torch.Tensor,
     ):
         # Calc CTC loss
+        """Internal: calc ctc loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         loss_ctc = self.ctc(encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
 
         # Calc CER using CTC
@@ -309,10 +387,89 @@ class Transformer(nn.Module):
             cer_ctc = self.error_calculator(ys_hat.cpu(), ys_pad.cpu(), is_ctc=True)
         return loss_ctc, cer_ctc
 
+    def inference_batch_ctc(
+        self,
+        data_in,
+        data_lengths=None,
+        key: list = None,
+        tokenizer=None,
+        frontend=None,
+        **kwargs,
+    ):
+        """Batch CTC greedy decoding for fast inference.
+
+        Uses CTC output with greedy decoding (argmax + collapse repeats + remove blanks).
+        Much faster than autoregressive beam search, with comparable accuracy.
+        """
+        meta_data = {}
+
+        # extract fbank feats
+        time1 = time.perf_counter()
+        audio_sample_list = load_audio_text_image_video(
+            data_in,
+            fs=frontend.fs,
+            audio_fs=kwargs.get("fs", 16000),
+            data_type=kwargs.get("data_type", "sound"),
+            tokenizer=tokenizer,
+        )
+        time2 = time.perf_counter()
+        meta_data["load_data"] = f"{time2 - time1:0.3f}"
+        speech, speech_lengths = extract_fbank(
+            audio_sample_list, data_type=kwargs.get("data_type", "sound"), frontend=frontend
+        )
+        time3 = time.perf_counter()
+        meta_data["extract_feat"] = f"{time3 - time2:0.3f}"
+        meta_data["batch_data_time"] = (
+            speech_lengths.sum().item() * frontend.frame_shift * frontend.lfr_n / 1000
+        )
+
+        speech = speech.to(device=kwargs["device"])
+        speech_lengths = speech_lengths.to(device=kwargs["device"])
+
+        # Encoder
+        encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+        if isinstance(encoder_out, tuple):
+            encoder_out = encoder_out[0]
+
+        # CTC log probs
+        ctc_logprobs = self.ctc.log_softmax(encoder_out)
+
+        results = []
+        b = encoder_out.size(0)
+        if key is None:
+            key = [f"utt_{i}" for i in range(b)]
+
+        for i in range(b):
+            x = ctc_logprobs[i, :encoder_out_lens[i].item(), :]
+            yseq = x.argmax(dim=-1)
+            yseq = torch.unique_consecutive(yseq, dim=-1)
+            mask = yseq != self.blank_id
+            token_int = yseq[mask].tolist()
+
+            token = tokenizer.ids2tokens(token_int)
+            text_postprocessed, _ = postprocess_utils.sentence_postprocess(token)
+
+            result_i = {"key": key[i], "text": text_postprocessed}
+            results.append(result_i)
+
+            if kwargs.get("output_dir") is not None:
+                if not hasattr(self, "writer"):
+                    self.writer = DatadirWriter(kwargs.get("output_dir"))
+                ibest_writer = self.writer["1best_recog"]
+                ibest_writer["token"][key[i]] = " ".join(token)
+                ibest_writer["text"][key[i]] = text_postprocessed
+
+        return results, meta_data
+
     def init_beam_search(
         self,
         **kwargs,
     ):
+        """Init beam search.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         from funasr.models.transformer.search import BeamSearch
         from funasr.models.transformer.scorers.ctc import CTCPrefixScorer
         from funasr.models.transformer.scorers.length_bonus import LengthBonus
@@ -364,8 +521,21 @@ class Transformer(nn.Module):
         **kwargs,
     ):
 
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         if kwargs.get("batch_size", 1) > 1:
-            raise NotImplementedError("batch decoding is not implemented")
+            return self.inference_batch_ctc(
+                data_in, data_lengths=data_lengths, key=key,
+                tokenizer=tokenizer, frontend=frontend, **kwargs
+            )
 
         # init beamsearch
         if self.beam_search is None:

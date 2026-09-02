@@ -18,6 +18,12 @@ from funasr.register import tables
 @tables.register("batch_sampler_classes", "RankFullLocalShuffleBatchSampler")
 @tables.register("batch_sampler_classes", "RankFullLocalShuffleDynamicBatchSampler")
 def CustomDistributedBatchSampler_fn(dataset, **kwargs):
+    """Customdistributedbatchsampler fn.
+    
+        Args:
+            dataset: TODO.
+            **kwargs: Additional keyword arguments.
+        """
     dataloader_args = {}
     batch_type = kwargs.get("batch_type", "example")
     if batch_type == "example":
@@ -33,6 +39,10 @@ def CustomDistributedBatchSampler_fn(dataset, **kwargs):
     dataloader_args["batch_sampler"] = batch_sampler
     dataloader_args["num_workers"] = kwargs.get("num_workers", 4)
     dataloader_args["pin_memory"] = kwargs.get("pin_memory", True)
+    num_workers = dataloader_args.get("num_workers", 4)
+    if num_workers > 0:
+        dataloader_args["persistent_workers"] = kwargs.get("persistent_workers", True)
+        dataloader_args["prefetch_factor"] = kwargs.get("prefetch_factor", 2)
 
     return dataloader_args
 
@@ -50,6 +60,18 @@ class CustomDistributedBatchSampler(Sampler):
         **kwargs,
     ):
 
+        """Initialize CustomDistributedBatchSampler.
+        
+            Args:
+                dataset: TODO.
+                batch_size: Number of samples per batch.
+                num_replicas: TODO.
+                rank: TODO.
+                shuffle: TODO.
+                drop_last: TODO.
+                is_training: Boolean flag for training.
+                **kwargs: Additional keyword arguments.
+            """
         try:
             rank = dist.get_rank()
             num_replicas = dist.get_world_size()
@@ -79,6 +101,7 @@ class CustomDistributedBatchSampler(Sampler):
 
     def __iter__(self):
         # Generate a list of indices
+        """Internal: iter  ."""
         if self.shuffle:
             g = torch.Generator()
             g.manual_seed(self.epoch)
@@ -123,9 +146,15 @@ class CustomDistributedBatchSampler(Sampler):
 
     def __len__(self):
 
+        """Internal: len  ."""
         return self.num_samples // self.batch_size
 
     def set_epoch(self, epoch):
+        """Set epoch.
+        
+            Args:
+                epoch: TODO.
+            """
         self.epoch = epoch
 
 
@@ -143,6 +172,19 @@ class CustomDistributedBufferBatchSampler(Sampler):
         **kwargs,
     ):
 
+        """Initialize CustomDistributedBufferBatchSampler.
+        
+            Args:
+                dataset: TODO.
+                batch_size: Number of samples per batch.
+                num_replicas: TODO.
+                rank: TODO.
+                shuffle: TODO.
+                drop_last: TODO.
+                is_training: Boolean flag for training.
+                sort_size: Size/dimension parameter.
+                **kwargs: Additional keyword arguments.
+            """
         try:
             rank = dist.get_rank()
             num_replicas = dist.get_world_size()
@@ -173,6 +215,7 @@ class CustomDistributedBufferBatchSampler(Sampler):
 
     def __iter__(self):
         # Generate a list of indices
+        """Internal: iter  ."""
         if self.shuffle:
             g = torch.Generator()
             g.manual_seed(self.epoch)
@@ -225,6 +268,11 @@ class CustomDistributedBufferBatchSampler(Sampler):
 
     def _create_batches_from_buffer(self, buffer):
         # Function to convert the sorted buffer into batches
+        """Internal: create batches from buffer.
+        
+            Args:
+                buffer: TODO.
+            """
         batched_buffer = [
             buffer[i : i + self.batch_size] for i in range(0, len(buffer), self.batch_size)
         ]
@@ -234,9 +282,15 @@ class CustomDistributedBufferBatchSampler(Sampler):
 
     def __len__(self):
 
+        """Internal: len  ."""
         return self.num_samples // self.batch_size
 
     def set_epoch(self, epoch):
+        """Set epoch.
+        
+            Args:
+                epoch: TODO.
+            """
         self.epoch = epoch
 
 
@@ -253,6 +307,18 @@ class CustomDistributedDynamicBatchSampler(DistributedSampler):
         **kwargs,
     ):
 
+        """Initialize CustomDistributedDynamicBatchSampler.
+        
+            Args:
+                dataset: TODO.
+                batch_size: Number of samples per batch.
+                num_replicas: TODO.
+                rank: TODO.
+                shuffle: TODO.
+                drop_last: TODO.
+                is_training: Boolean flag for training.
+                **kwargs: Additional keyword arguments.
+            """
         try:
             rank = dist.get_rank()
             num_replicas = dist.get_world_size()
@@ -274,6 +340,7 @@ class CustomDistributedDynamicBatchSampler(DistributedSampler):
         self.length_scale_source = kwargs.get("length_scale_source", 1.0)
 
     def __iter__(self):
+        """Internal: iter  ."""
         if self.shuffle:
             g = torch.Generator()
             g.manual_seed(self.epoch)
@@ -315,9 +382,15 @@ class CustomDistributedDynamicBatchSampler(DistributedSampler):
 
     def __len__(self):
 
+        """Internal: len  ."""
         return 1
 
     def set_epoch(self, epoch):
+        """Set epoch.
+        
+            Args:
+                epoch: TODO.
+            """
         self.epoch = epoch
 
 
@@ -338,6 +411,22 @@ class CustomDistributedBufferDynamicBatchSampler(DistributedSampler):
         **kwargs,
     ):
 
+        """Initialize CustomDistributedBufferDynamicBatchSampler.
+        
+            Args:
+                dataset: TODO.
+                batch_size: Number of samples per batch.
+                batch_type: TODO.
+                num_replicas: TODO.
+                rank: TODO.
+                rank_split: TODO.
+                shuffle: TODO.
+                drop_last: TODO.
+                is_training: Boolean flag for training.
+                sort_size: Size/dimension parameter.
+                start_step: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         try:
             rank = dist.get_rank()
             num_replicas = dist.get_world_size()
@@ -375,6 +464,7 @@ class CustomDistributedBufferDynamicBatchSampler(DistributedSampler):
         # )
 
     def __iter__(self):
+        """Internal: iter  ."""
         if self.shuffle:
             g = torch.Generator()
             g.manual_seed(self.epoch)
@@ -434,9 +524,15 @@ class CustomDistributedBufferDynamicBatchSampler(DistributedSampler):
 
     def __len__(self):
         # Calculate the number of batches per epoch for the current rank
+        """Internal: len  ."""
         return self.batch_num
 
     def set_epoch(self, epoch):
+        """Set epoch.
+        
+            Args:
+                epoch: TODO.
+            """
         self.epoch = epoch
 
 
@@ -444,6 +540,16 @@ class DistributedSamplerWarp(BatchSampler):
     def __init__(
         self, dataset, batch_size, num_replicas=None, rank=None, shuffle=True, drop_last=False
     ):
+        """Initialize DistributedSamplerWarp.
+        
+            Args:
+                dataset: TODO.
+                batch_size: Number of samples per batch.
+                num_replicas: TODO.
+                rank: TODO.
+                shuffle: TODO.
+                drop_last: TODO.
+            """
         if num_replicas is None:
             if not torch.distributed.is_available():
                 raise RuntimeError("Requires distributed package to be available")
@@ -470,6 +576,7 @@ class DistributedSamplerWarp(BatchSampler):
 
     def __iter__(self):
         # If we shuffle, we need to call the set_epoch method
+        """Internal: iter  ."""
         if self.shuffle:
             self.sampler.set_epoch(self.epoch)
 
@@ -477,4 +584,9 @@ class DistributedSamplerWarp(BatchSampler):
         return super().__iter__()
 
     def set_epoch(self, epoch):
+        """Set epoch.
+        
+            Args:
+                epoch: TODO.
+            """
         self.epoch = epoch

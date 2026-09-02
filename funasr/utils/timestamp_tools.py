@@ -9,6 +9,12 @@ from itertools import zip_longest
 
 
 def cif_wo_hidden(alphas, threshold):
+    """Cif wo hidden.
+    
+        Args:
+            alphas: TODO.
+            threshold: TODO.
+        """
     batch_size, len_time = alphas.size()
     # loop varss
     integrate = torch.zeros([batch_size], device=alphas.device)
@@ -31,6 +37,17 @@ def cif_wo_hidden(alphas, threshold):
 def ts_prediction_lfr6_standard(
     us_alphas, us_peaks, char_list, vad_offset=0.0, force_time_shift=-1.5, sil_in_str=True, upsample_rate=3,
 ):
+    """Ts prediction lfr6 standard.
+    
+        Args:
+            us_alphas: TODO.
+            us_peaks: TODO.
+            char_list: TODO.
+            vad_offset: TODO.
+            force_time_shift: TODO.
+            sil_in_str: TODO.
+            upsample_rate: TODO.
+        """
     if not len(char_list):
         return "", []
     START_END_THRESHOLD = 5
@@ -108,6 +125,19 @@ def ts_prediction_lfr6_standard(
 def timestamp_sentence(
     punc_id_list, timestamp_postprocessed, text_postprocessed, return_raw_text=False
 ):
+
+    """Split recognized text into sentences using punctuation, with timestamps.
+
+    Args:
+        punc_id_list (Tensor/list): Punctuation IDs from CT-Transformer.
+            Values: 1=none, 2=comma, 3=period, 4=question.
+        timestamp_postprocessed (list): Per-character timestamps [[start_ms, end_ms], ...].
+        text_postprocessed (str): Space-separated recognized text.
+        return_raw_text (bool): Include raw_text in output.
+
+    Returns:
+        list[dict]: Sentences with keys: text, start, end, timestamp, [raw_text].
+    """
     punc_list = ["，", "。", "？", "、"]
     res = []
     if text_postprocessed is None:
@@ -193,6 +223,14 @@ def timestamp_sentence(
 def timestamp_sentence_en(
     punc_id_list, timestamp_postprocessed, text_postprocessed, return_raw_text=False
 ):
+    """Timestamp sentence en.
+    
+        Args:
+            punc_id_list: TODO.
+            timestamp_postprocessed: TODO.
+            text_postprocessed: TODO.
+            return_raw_text: TODO.
+        """
     punc_list = [",", ".", "?", ","]
     res = []
     if text_postprocessed is None:
@@ -243,16 +281,16 @@ def timestamp_sentence_en(
 
         punc_id = int(punc_id) if punc_id is not None else 1
         sentence_end = timestamp[1] if timestamp is not None else sentence_end
-        sentence_text = sentence_text[1:] if sentence_text[0] == ' ' else sentence_text
+        if sentence_text.startswith(" "):
+            sentence_text = sentence_text[1:]
         if is_sentence_start:
             sentence_start = timestamp[0] if timestamp is not None else sentence_start
             is_sentence_start = False
         if punc_id > 1:
             is_sentence_start = True
             sentence_text += punc_list[punc_id - 2]
-            sentence_text_seg = (
-                sentence_text_seg[:-1] if sentence_text_seg[-1] == " " else sentence_text_seg
-            )
+            if sentence_text_seg.endswith(" "):
+                sentence_text_seg = sentence_text_seg[:-1]
             if return_raw_text:
                 res.append(
                     {

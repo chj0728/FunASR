@@ -7,25 +7,43 @@ import librosa
 import torch.distributed as dist
 from typing import Collection
 import torch
-import torchaudio
+try:
+    import torchaudio
+except ImportError:
+    torchaudio = None
 from torch import nn
 import random
 import re
 from funasr.tokenizer.cleaner import TextCleaner
 from funasr.register import tables
+from funasr.utils.torchaudio_compat import require_torchaudio
 
 
 @tables.register("preprocessor_classes", "SpeechPreprocessSpeedPerturb")
 class SpeechPreprocessSpeedPerturb(nn.Module):
     def __init__(self, speed_perturb: list = None, **kwargs):
+        """Initialize SpeechPreprocessSpeedPerturb.
+        
+            Args:
+                speed_perturb: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         self.speed_perturb = speed_perturb
 
     def forward(self, waveform, fs, **kwargs):
+        """Forward pass for training.
+        
+            Args:
+                waveform: TODO.
+                fs: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         if self.speed_perturb is None:
             return waveform
         speed = random.choice(self.speed_perturb)
         if speed != 1.0:
+            torchaudio = require_torchaudio("speed perturbation")
             if not isinstance(waveform, torch.Tensor):
                 waveform = torch.tensor(waveform)
             waveform, _ = torchaudio.sox_effects.apply_effects_tensor(
@@ -45,11 +63,25 @@ class TextPreprocessSegDict(nn.Module):
         split_with_space: bool = False,
         **kwargs
     ):
+        """Initialize TextPreprocessSegDict.
+        
+            Args:
+                seg_dict: TODO.
+                text_cleaner: TODO.
+                split_with_space: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         self.text_cleaner = TextCleaner(text_cleaner)
 
     def forward(self, text, **kwargs):
+        """Forward pass for training.
+        
+            Args:
+                text: Text tensor or string input.
+                **kwargs: Additional keyword arguments.
+            """
         text = self.text_cleaner(text)
 
         return text

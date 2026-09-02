@@ -13,7 +13,7 @@
 
 #### python版本示例
 
-支持实时流式语音识别，并且会用非流式模型进行纠错，输出文本带有标点。目前只支持单个client，如需多并发请参考下方c++版本服务部署SDK
+支持实时流式语音识别，并且会用非流式模型进行纠错，输出文本带有标点。现已支持多个客户端并发(非阻塞推理,可用 --concurrent_vad / --concurrent_asr_online / --concurrent_asr_offline / --concurrent_punc / --concurrent_sv 调节各阶段并发度);如需更高吞吐,仍推荐下方 c++ 版本服务部署 SDK
 
 ##### 服务端部署
 ```shell
@@ -44,7 +44,7 @@ sudo bash install_docker.sh
 ##### 实时语音听写服务部署
 
 ###### docker镜像下载与启动
-通过下述命令拉取并启动FunASR软件包docker镜像（[获取最新镜像版本](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online_zh.md)）：
+通过下述命令拉取并启动FunASR软件包docker镜像（[获取最新镜像版本](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online_zh.md)）：
 
 ```shell
 sudo docker pull \
@@ -82,13 +82,13 @@ nohup bash run_server_2pass.sh \
 ```shell
 python3 funasr_wss_client.py --host "127.0.0.1" --port 10096 --mode 2pass
 ```
-更多例子参考（[点击此处](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online_zh.md)）
+更多例子参考（[点击此处](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online_zh.md)）
 
 ##### 离线文件转写服务部署
 
 ###### 镜像启动
 
-通过下述命令拉取并启动FunASR软件包docker镜像（[获取最新镜像版本](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline_zh.md)）：
+通过下述命令拉取并启动FunASR软件包docker镜像（[获取最新镜像版本](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline_zh.md)）：
 
 ```shell
 sudo docker pull \
@@ -126,7 +126,7 @@ nohup bash run_server.sh \
 ```shell
 python3 funasr_wss_client.py --host "127.0.0.1" --port 10095 --mode offline --audio_in "../audio/asr_example.wav"
 ```
-更多例子参考（[点击此处](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline_zh.md)）
+更多例子参考（[点击此处](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline_zh.md)）
 
 
 

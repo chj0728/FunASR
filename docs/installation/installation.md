@@ -2,7 +2,7 @@
 
 <p align="left">
     <a href=""><img src="https://img.shields.io/badge/OS-Linux%2C%20Win%2C%20Mac-brightgreen.svg"></a>
-    <a href=""><img src="https://img.shields.io/badge/Python->=3.7,<=3.10-aff.svg"></a>
+    <a href=""><img src="https://img.shields.io/badge/Python->=3.8,<=3.13-aff.svg"></a>
     <a href=""><img src="https://img.shields.io/badge/Pytorch-%3E%3D1.11-blue"></a>
 </p>
 
@@ -50,7 +50,7 @@ pip3 install -U funasr
 #### Or install from source code
 
 ``` sh
-git clone https://github.com/alibaba/FunASR.git && cd FunASR
+git clone https://github.com/modelscope/FunASR.git && cd FunASR
 pip3 install -e ./
 # For the users in China, you could install with the command:
 # pip3 install -e ./ -i https://mirror.sjtu.edu.cn/pypi/web/simple

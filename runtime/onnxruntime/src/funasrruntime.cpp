@@ -523,6 +523,8 @@
 		p_result->snippet_time = audio->GetTimeLen();
 		
 		audio->Split(vad_online_handle, chunk_len, input_finished, mode);
+		p_result->start = audio->start;
+		p_result->end = audio->end;
 
 		funasr::AudioFrame* frame = nullptr;
 		while(audio->FetchChunck(frame) > 0){
@@ -562,12 +564,8 @@
 			if (wfst_decoder){
 				wfst_decoder->StartUtterance();
 			}
-			float** buff;
-			int* len;
-			buff = new float*[1];
-        	len = new int[1];
-			buff[0] = frame->data;
-			len[0] = frame->len;
+			float* buff[] = {frame->data};
+			int len[] = {frame->len};
 			vector<string> msgs;
 			if(tpass_stream->GetModelType() == MODEL_SVS){
 				msgs = (tpass_stream->asr_handle)->Forward(buff, len, true, svs_lang, svs_itn, 1);
@@ -577,6 +575,8 @@
 			string msg = msgs.size()>0?msgs[0]:"";
 			std::vector<std::string> msg_vec = funasr::SplitStr(msg, " | ");  // split with timestamp
 			if(msg_vec.size()==0){
+				delete frame;
+				frame = nullptr;
 				continue;
 			}
 			msg = msg_vec[0];
@@ -693,6 +693,23 @@
 			return nullptr;
 
 		return p_result->tpass_msg.c_str();
+	}
+
+	_FUNASRAPI const int64_t FunASRGetTpassStart(FUNASR_RESULT result)
+	{
+		funasr::FUNASR_RECOG_RESULT * p_result = (funasr::FUNASR_RECOG_RESULT*)result;
+		if(!p_result)
+			return 0;
+
+		return p_result->start;
+	}
+	_FUNASRAPI const int64_t FunASRGetTpassEnd(FUNASR_RESULT result)
+	{
+		funasr::FUNASR_RECOG_RESULT * p_result = (funasr::FUNASR_RECOG_RESULT*)result;
+		if(!p_result)
+			return 0;
+
+		return p_result->end;
 	}
 
 	_FUNASRAPI const char* CTTransformerGetResult(FUNASR_RESULT result,int n_index)

@@ -12,12 +12,22 @@ from funasr.register import tables
 
 @tables.register("batch_sampler_classes", "EspnetStyleBatchSampler")
 def EspnetStyleBatchSampler_fn(dataset, **kwargs):
+    """Espnetstylebatchsampler fn.
+    
+        Args:
+            dataset: TODO.
+            **kwargs: Additional keyword arguments.
+        """
     dataloader_args = {}
 
     batch_sampler = EspnetStyleBatchSampler(dataset, **kwargs)
     dataloader_args["batch_sampler"] = batch_sampler
     dataloader_args["num_workers"] = kwargs.get("num_workers", 4)
     dataloader_args["pin_memory"] = kwargs.get("pin_memory", True)
+    num_workers = dataloader_args.get("num_workers", 4)
+    if num_workers > 0:
+        dataloader_args["persistent_workers"] = kwargs.get("persistent_workers", True)
+        dataloader_args["prefetch_factor"] = kwargs.get("prefetch_factor", 2)
 
     return dataloader_args
 
@@ -45,6 +55,22 @@ class EspnetStyleBatchSampler(DistributedSampler):
         **kwargs,
     ):
 
+        """Initialize EspnetStyleBatchSampler.
+        
+            Args:
+                dataset: TODO.
+                batch_size: Number of samples per batch.
+                batch_type: TODO.
+                rank: TODO.
+                num_replicas: TODO.
+                rank_split: TODO.
+                shuffle: TODO.
+                drop_last: TODO.
+                is_training: Boolean flag for training.
+                sort_size: Size/dimension parameter.
+                start_step: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         try:
             rank = dist.get_rank()
             num_replicas = dist.get_world_size()
@@ -79,6 +105,7 @@ class EspnetStyleBatchSampler(DistributedSampler):
         #                  shuffle=shuffle, drop_last=drop_last)
 
     def __iter__(self):
+        """Internal: iter  ."""
         if self.shuffle:
             g = torch.Generator()
             g.manual_seed(self.epoch)
@@ -158,8 +185,14 @@ class EspnetStyleBatchSampler(DistributedSampler):
 
     def __len__(self):
         # Calculate the number of batches per epoch for the current rank
+        """Internal: len  ."""
         return self.batch_num
 
     def set_epoch(self, epoch):
         # Set the epoch for shuffling
+        """Set epoch.
+        
+            Args:
+                epoch: TODO.
+            """
         self.epoch = epoch

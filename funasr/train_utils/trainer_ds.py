@@ -6,7 +6,7 @@ import logging
 from tqdm import tqdm
 from datetime import datetime
 import torch.distributed as dist
-from torch.cuda.amp import autocast, GradScaler
+from funasr.utils.amp import autocast, GradScaler
 from contextlib import nullcontext, contextmanager
 from pathlib import Path
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -25,8 +25,14 @@ except:
 
 @contextmanager
 def maybe_autocast(dtype=None, use_deepspeed=False):
+    """Maybe autocast.
+    
+        Args:
+            dtype: TODO.
+            use_deepspeed: TODO.
+        """
     if use_deepspeed:
-        with torch.cuda.amp.autocast(enabled=True, dtype=dtype, cache_enabled=False):
+        with autocast(enabled=True, dtype=dtype, cache_enabled=False):
             yield
     else:
         if dtype == torch.float16 or dtype == torch.bfloat16:
@@ -228,14 +234,15 @@ class Trainer:
             # torch.save(state, latest)
             with torch.no_grad():
                 model.save_checkpoint(save_dir=self.output_dir, tag=f"model.pt", client_state=state)
-            if self.best_step_or_epoch == "":
+            if self.best_step_or_epoch == "" and ckpt_name in getattr(
+                self, f"val_{self.avg_keep_nbest_models_type}_step_or_epoch"
+            ):
                 self.best_step_or_epoch = ckpt_name
 
             if self.avg_keep_nbest_models_type == "acc":
-                if (
-                    self.val_acc_step_or_epoch[ckpt_name]
-                    >= self.val_acc_step_or_epoch[self.best_step_or_epoch]
-                ):
+                cur_acc = self.val_acc_step_or_epoch.get(ckpt_name)
+                best_acc = self.val_acc_step_or_epoch.get(self.best_step_or_epoch)
+                if cur_acc is not None and (best_acc is None or cur_acc >= best_acc):
                     self.best_step_or_epoch = ckpt_name
                     best_ckpt = Path(os.path.join(self.output_dir, f"model.pt.best"))
                     # torch.save(state, best_ckpt)
@@ -244,17 +251,20 @@ class Trainer:
                             save_dir=self.output_dir, tag=f"model.pt.best", client_state=state
                         )
                     logging.info(
-                        f"Update best acc: {self.val_acc_step_or_epoch[self.best_step_or_epoch]:.4f}, {best_ckpt}"
+                        f"Update best acc: {cur_acc:.4f}, {best_ckpt}"
+                    )
+                elif cur_acc is None:
+                    logging.info(
+                        f"Checkpoint {ckpt_name} saved at a step with no validation acc yet; not considered for best."
                     )
                 else:
                     logging.info(
-                        f"No improvement in acc: {self.val_acc_step_or_epoch[ckpt_name]:.4f} < {self.val_acc_step_or_epoch[self.best_step_or_epoch]:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
+                        f"No improvement in acc: {cur_acc:.4f} < {best_acc:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
                     )
             elif self.avg_keep_nbest_models_type == "loss":
-                if (
-                    self.val_loss_step_or_epoch[ckpt_name]
-                    <= self.val_loss_step_or_epoch[self.best_step_or_epoch]
-                ):
+                cur_loss = self.val_loss_step_or_epoch.get(ckpt_name)
+                best_loss = self.val_loss_step_or_epoch.get(self.best_step_or_epoch)
+                if cur_loss is not None and (best_loss is None or cur_loss <= best_loss):
                     self.best_step_or_epoch = ckpt_name
                     best_ckpt = Path(os.path.join(self.output_dir, f"model.pt.best"))
                     # torch.save(state, best_ckpt)
@@ -263,34 +273,54 @@ class Trainer:
                             save_dir=self.output_dir, tag=f"model.pt.best", client_state=state
                         )
                     logging.info(
-                        f"Update best loss: {self.val_loss_step_or_epoch[self.best_step_or_epoch]:.4f}, {best_ckpt}"
+                        f"Update best loss: {cur_loss:.4f}, {best_ckpt}"
+                    )
+                elif cur_loss is None:
+                    logging.info(
+                        f"Checkpoint {ckpt_name} saved at a step with no validation loss yet; not considered for best."
                     )
                 else:
                     logging.info(
-                        f"No improvement in loss: {self.val_loss_step_or_epoch[ckpt_name]:.4f} > {self.val_loss_step_or_epoch[self.best_step_or_epoch]:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
+                        f"No improvement in loss: {cur_loss:.4f} > {best_loss:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
                     )
             else:
                 print("Undo")
             if self.rank == 0:
-                self.saved_ckpts[ckpt_name] = getattr(
+                # Only checkpoints carrying the configured validation metric
+                # (acc or loss) are ranked. A checkpoint saved at an unvalidated
+                # step (e.g. save_checkpoint_interval is not a multiple of
+                # validate_interval) is kept on disk but excluded from
+                # saved_ckpts, so it never competes in best-model ranking or
+                # keep_nbest_models pruning with a fabricated score and cannot
+                # evict a validated best checkpoint.
+                metric_value = getattr(
                     self, f"val_{self.avg_keep_nbest_models_type}_step_or_epoch"
-                )[ckpt_name]
-                if self.keep_nbest_models > 0:
-                    if len(self.saved_ckpts) > self.keep_nbest_models:
-                        if self.avg_keep_nbest_models_type == "acc":
-                            key = min(self.saved_ckpts, key=self.saved_ckpts.get)
-                        else:
-                            key = max(self.saved_ckpts, key=self.saved_ckpts.get)
-                        if key in self.saved_ckpts:
-                            del self.saved_ckpts[key]
-                        filename = os.path.join(self.output_dir, key)
-                        logging.info(f"Delete: {filename}")
-                        if os.path.exists(filename):
-                            # os.remove(filename)
-                            misc_utils.smart_remove(filename)
+                ).get(ckpt_name)
+                if metric_value is None:
+                    logging.info(
+                        f"Checkpoint {ckpt_name} has no {self.avg_keep_nbest_models_type} metric; "
+                        "kept on disk but excluded from keep_nbest_models ranking."
+                    )
+                else:
+                    self.saved_ckpts[ckpt_name] = metric_value
+                    if self.keep_nbest_models > 0:
+                        if len(self.saved_ckpts) > self.keep_nbest_models:
+                            if self.avg_keep_nbest_models_type == "acc":
+                                key = min(self.saved_ckpts, key=self.saved_ckpts.get)
+                            else:
+                                key = max(self.saved_ckpts, key=self.saved_ckpts.get)
+                            if key in self.saved_ckpts:
+                                del self.saved_ckpts[key]
+                            filename = os.path.join(self.output_dir, key)
+                            logging.info(f"Delete: {filename}")
+                            if os.path.exists(filename):
+                                # os.remove(filename)
+                                misc_utils.smart_remove(filename)
 
         elif self.use_fsdp:
-            pass
+            raise NotImplementedError(
+                "FSDP checkpoint saving is not yet implemented. Use DDP or DeepSpeed instead."
+            )
         elif self.rank == 0:
             logging.info(
                 f"Save checkpoint: {epoch}, rank: {self.rank}, local_rank: {self.local_rank}\n"
@@ -348,57 +378,79 @@ class Trainer:
             logging.info(f"\nCheckpoint saved to {filename}\n")
             latest = Path(os.path.join(self.output_dir, f"model.pt"))
             torch.save(state, latest)
-            if self.best_step_or_epoch == "":
+            if self.best_step_or_epoch == "" and ckpt_name in getattr(
+                self, f"val_{self.avg_keep_nbest_models_type}_step_or_epoch"
+            ):
                 self.best_step_or_epoch = ckpt_name
 
             if self.avg_keep_nbest_models_type == "acc":
-                if (
-                    self.val_acc_step_or_epoch[ckpt_name]
-                    >= self.val_acc_step_or_epoch[self.best_step_or_epoch]
-                ):
+                cur_acc = self.val_acc_step_or_epoch.get(ckpt_name)
+                best_acc = self.val_acc_step_or_epoch.get(self.best_step_or_epoch)
+                if cur_acc is not None and (best_acc is None or cur_acc >= best_acc):
                     self.best_step_or_epoch = ckpt_name
                     best_ckpt = Path(os.path.join(self.output_dir, f"model.pt.best"))
                     torch.save(state, best_ckpt)
                     logging.info(
-                        f"Update best acc: {self.val_acc_step_or_epoch[self.best_step_or_epoch]:.4f}, {best_ckpt}"
+                        f"Update best acc: {cur_acc:.4f}, {best_ckpt}"
+                    )
+                elif cur_acc is None:
+                    logging.info(
+                        f"Checkpoint {ckpt_name} saved at a step with no validation acc yet; not considered for best."
                     )
                 else:
                     logging.info(
-                        f"No improvement in acc: {self.val_acc_step_or_epoch[ckpt_name]:.4f} < {self.val_acc_step_or_epoch[self.best_step_or_epoch]:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
+                        f"No improvement in acc: {cur_acc:.4f} < {best_acc:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
                     )
             elif self.avg_keep_nbest_models_type == "loss":
-                if (
-                    self.val_loss_step_or_epoch[ckpt_name]
-                    <= self.val_loss_step_or_epoch[self.best_step_or_epoch]
-                ):
+                cur_loss = self.val_loss_step_or_epoch.get(ckpt_name)
+                best_loss = self.val_loss_step_or_epoch.get(self.best_step_or_epoch)
+                if cur_loss is not None and (best_loss is None or cur_loss <= best_loss):
                     self.best_step_or_epoch = ckpt_name
                     best_ckpt = Path(os.path.join(self.output_dir, f"model.pt.best"))
                     torch.save(state, best_ckpt)
                     logging.info(
-                        f"Update best loss: {self.val_loss_step_or_epoch[self.best_step_or_epoch]:.4f}, {best_ckpt}"
+                        f"Update best loss: {cur_loss:.4f}, {best_ckpt}"
+                    )
+                elif cur_loss is None:
+                    logging.info(
+                        f"Checkpoint {ckpt_name} saved at a step with no validation loss yet; not considered for best."
                     )
                 else:
                     logging.info(
-                        f"No improvement in loss: {self.val_loss_step_or_epoch[ckpt_name]:.4f} > {self.val_loss_step_or_epoch[self.best_step_or_epoch]:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
+                        f"No improvement in loss: {cur_loss:.4f} > {best_loss:.4f}, {os.path.join(self.output_dir, self.best_step_or_epoch)}"
                     )
             else:
                 print("Undo")
-            self.saved_ckpts[ckpt_name] = getattr(
+            # Only checkpoints carrying the configured validation metric
+            # (acc or loss) are ranked. A checkpoint saved at an unvalidated
+            # step (e.g. save_checkpoint_interval is not a multiple of
+            # validate_interval) is kept on disk but excluded from saved_ckpts,
+            # so it never competes in best-model ranking or keep_nbest_models
+            # pruning with a fabricated score and cannot evict a validated
+            # best checkpoint.
+            metric_value = getattr(
                 self, f"val_{self.avg_keep_nbest_models_type}_step_or_epoch"
-            )[ckpt_name]
-            if self.keep_nbest_models > 0:
-                if len(self.saved_ckpts) > self.keep_nbest_models:
-                    if self.avg_keep_nbest_models_type == "acc":
-                        key = min(self.saved_ckpts, key=self.saved_ckpts.get)
-                    else:
-                        key = max(self.saved_ckpts, key=self.saved_ckpts.get)
-                    if key in self.saved_ckpts:
-                        del self.saved_ckpts[key]
-                    filename = os.path.join(self.output_dir, key)
-                    logging.info(f"Delete: {filename}")
-                    if os.path.exists(filename):
-                        # os.remove(filename)
-                        misc_utils.smart_remove(filename)
+            ).get(ckpt_name)
+            if metric_value is None:
+                logging.info(
+                    f"Checkpoint {ckpt_name} has no {self.avg_keep_nbest_models_type} metric; "
+                    "kept on disk but excluded from keep_nbest_models ranking."
+                )
+            else:
+                self.saved_ckpts[ckpt_name] = metric_value
+                if self.keep_nbest_models > 0:
+                    if len(self.saved_ckpts) > self.keep_nbest_models:
+                        if self.avg_keep_nbest_models_type == "acc":
+                            key = min(self.saved_ckpts, key=self.saved_ckpts.get)
+                        else:
+                            key = max(self.saved_ckpts, key=self.saved_ckpts.get)
+                        if key in self.saved_ckpts:
+                            del self.saved_ckpts[key]
+                        filename = os.path.join(self.output_dir, key)
+                        logging.info(f"Delete: {filename}")
+                        if os.path.exists(filename):
+                            # os.remove(filename)
+                            misc_utils.smart_remove(filename)
 
         if self.use_ddp or self.use_fsdp:
             dist.barrier()
@@ -592,11 +644,13 @@ class Trainer:
             time1 = time.perf_counter()
             loss_dict["speed_stats"]["data_load"] = f"{time1-time_beg:0.3f}"
 
-            batch = to_device(batch, self.device)
+            batch = to_device(batch, self.device, non_blocking=True)
 
             my_context = nullcontext
             if self.use_ddp or self.use_fsdp:
-                my_context = model.no_sync if batch_idx % accum_grad != 0 else my_context
+                my_context = (
+                    model.no_sync if (batch_idx + 1) % accum_grad != 0 else my_context
+                )
             with my_context():
                 time2 = time.perf_counter()
 
@@ -666,6 +720,13 @@ class Trainer:
             self.train_acc_avg = train_acc_avg.detach().cpu().item() / self.world_size
 
     def forward_step(self, model, batch, loss_dict={}):
+        """Forward step.
+        
+            Args:
+                model: Model instance or model name.
+                batch: TODO.
+                loss_dict: TODO.
+            """
         with maybe_autocast(dtype=self.dtype, use_deepspeed=self.use_deepspeed):
             retval = model(**batch)
 
@@ -677,6 +738,13 @@ class Trainer:
         loss_dict["weight"] = weight
 
     def backward_step(self, model, scaler, loss_dict={}):
+        """Backward step.
+        
+            Args:
+                model: Model instance or model name.
+                scaler: TODO.
+                loss_dict: TODO.
+            """
         loss = loss_dict["loss"]
 
         if self.use_deepspeed:
@@ -689,6 +757,15 @@ class Trainer:
                 loss.backward()
 
     def update_step(self, model, optim, scheduler, scaler, loss_dict=None):
+        """Update step.
+        
+            Args:
+                model: Model instance or model name.
+                optim: TODO.
+                scheduler: TODO.
+                scaler: TODO.
+                loss_dict: TODO.
+            """
         batch_idx = loss_dict["batch_idx"]
         if self.use_deepspeed:
             model.step()
@@ -767,7 +844,7 @@ class Trainer:
                 time1 = time.perf_counter()
                 loss_dict["speed_stats"]["data_load"] = f"{time1 - time_beg:0.3f}"
 
-                batch = to_device(batch, self.device)
+                batch = to_device(batch, self.device, non_blocking=True)
 
                 time2 = time.perf_counter()
 
@@ -820,6 +897,13 @@ class Trainer:
         tag="train",
         **kwargs,
     ):
+        """Log.
+        
+            Args:
+                loss_dict: TODO.
+                tag: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         loss = loss_dict["loss"].detach().cpu().item()
         epoch = loss_dict["epoch"]
         batch_idx = loss_dict["batch_idx"]
@@ -880,8 +964,8 @@ class Trainer:
                     writer.add_scalar(f"stats_rank{self.rank}_{key}/{tag}", var.item(), batch_total)
                     description_dict[f"stats_rank{self.rank}_{key}/{tag}"] = var.item()
                 for key, var in speed_stats.items():
-                    writer.add_scalar(f"stats_rank{self.rank}_{key}/{tag}", eval(var), batch_total)
-                    description_dict[f"stats_rank{self.rank}_{key}/{tag}"] = eval(var)
+                    writer.add_scalar(f"stats_rank{self.rank}_{key}/{tag}", float(var), batch_total)
+                    description_dict[f"stats_rank{self.rank}_{key}/{tag}"] = float(var)
             if self.use_wandb and wandb is not None:
                 wandb.log(
                     description_dict,
@@ -890,6 +974,11 @@ class Trainer:
 
     def close(self, writer=None):
 
+        """Close.
+        
+            Args:
+                writer: TODO.
+            """
         if self.use_ddp or self.use_fsdp:
             dist.barrier()
 
@@ -901,6 +990,12 @@ class Trainer:
 
     def warp_model(self, model, **kwargs):
 
+        """Warp model.
+        
+            Args:
+                model: Model instance or model name.
+                **kwargs: Additional keyword arguments.
+            """
         if self.use_deepspeed:
             from deepspeed.runtime.zero.stage_1_and_2 import (
                 estimate_zero2_model_states_mem_needs_all_live,
@@ -946,6 +1041,12 @@ class Trainer:
         return model
 
     def warp_optim_scheduler(self, model, **kwargs):
+        """Warp optim scheduler.
+        
+            Args:
+                model: Model instance or model name.
+                **kwargs: Additional keyword arguments.
+            """
         from funasr.optimizers import optim_classes
         from funasr.schedulers import scheduler_classes
         from omegaconf import OmegaConf, DictConfig
@@ -963,7 +1064,7 @@ class Trainer:
         scheduler = kwargs.get("scheduler", "warmuplr")
         assert scheduler in scheduler_classes
         scheduler_class = scheduler_classes.get(scheduler)
-        scheduler = scheduler_class(optim, **kwargs.get("scheduler_conf"))
+        scheduler = scheduler_class(optim, **(kwargs.get("scheduler_conf") or {}))
 
         if self.use_deepspeed:
             import deepspeed
@@ -987,7 +1088,12 @@ class Trainer:
                 else:
 
                     def scheduler(opt):
-                        return scheduler_class(opt, **kwargs.get("scheduler_conf"))
+                        """Scheduler.
+                        
+                            Args:
+                                opt: TODO.
+                            """
+                        return scheduler_class(opt, **(kwargs.get("scheduler_conf") or {}))
 
             model, optimizer, _, scheduler = deepspeed.initialize(
                 args=args,

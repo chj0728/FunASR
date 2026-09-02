@@ -7,7 +7,7 @@ import time
 import copy
 import torch
 import logging
-from torch.cuda.amp import autocast
+from funasr.utils.amp import autocast
 from typing import Union, Dict, List, Tuple, Optional
 
 from funasr.register import tables
@@ -28,7 +28,23 @@ from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 
 @tables.register("model_classes", "Paraformer")
 class Paraformer(torch.nn.Module):
-    """
+    """Paraformer: Non-autoregressive End-to-End ASR Model.
+
+    High-accuracy speech recognition for Chinese/English. The production workhorse.
+
+    Features:
+    - Non-autoregressive (parallel decoding, fast inference)
+    - Character-level timestamps via CIF predictor
+    - Streaming and offline modes
+    - Hotword customization
+    - Speaker diarization (with spk_model)
+    - ONNX export support
+
+    Output: {"key": "...", "text": "recognized text", "timestamp": [[start_ms, end_ms], ...]}
+
+    Note: Requires punc_model="ct-punc" for punctuation (unlike Fun-ASR-Nano/SenseVoice
+    which output punctuation natively).
+
     Author: Speech Lab of DAMO Academy, Alibaba Group
     Paraformer: Fast and Accurate Parallel Transformer for Non-autoregressive End-to-End Speech Recognition
     https://arxiv.org/abs/2206.08317
@@ -73,6 +89,37 @@ class Paraformer(torch.nn.Module):
         **kwargs,
     ):
 
+        """Initialize Paraformer.
+        
+            Args:
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                encoder: TODO.
+                encoder_conf: Configuration dict for encoder.
+                decoder: TODO.
+                decoder_conf: Configuration dict for decoder.
+                ctc: TODO.
+                ctc_conf: Configuration dict for ctc.
+                predictor: TODO.
+                predictor_conf: Configuration dict for predictor.
+                ctc_weight: TODO.
+                input_size: Size/dimension parameter.
+                vocab_size: Size/dimension parameter.
+                ignore_id: TODO.
+                blank_id: TODO.
+                sos: TODO.
+                eos: TODO.
+                lsm_weight: TODO.
+                length_normalized_loss: TODO.
+                predictor_weight: TODO.
+                predictor_bias: TODO.
+                sampling_ratio: TODO.
+                share_embedding: TODO.
+                use_1st_decoder_loss: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         if specaug is not None:
@@ -267,6 +314,12 @@ class Paraformer(torch.nn.Module):
 
     def calc_predictor(self, encoder_out, encoder_out_lens):
 
+        """Calc predictor.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -279,6 +332,14 @@ class Paraformer(torch.nn.Module):
         self, encoder_out, encoder_out_lens, sematic_embeds, ys_pad_lens
     ):
 
+        """Cal decoder with predictor.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                sematic_embeds: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         decoder_outs = self.decoder(encoder_out, encoder_out_lens, sematic_embeds, ys_pad_lens)
         decoder_out = decoder_outs[0]
         decoder_out = torch.log_softmax(decoder_out, dim=-1)
@@ -291,6 +352,14 @@ class Paraformer(torch.nn.Module):
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
     ):
+        """Internal: calc att loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -338,6 +407,15 @@ class Paraformer(torch.nn.Module):
 
     def sampler(self, encoder_out, encoder_out_lens, ys_pad, ys_pad_lens, pre_acoustic_embeds):
 
+        """Sampler.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+                pre_acoustic_embeds: TODO.
+            """
         tgt_mask = (~make_pad_mask(ys_pad_lens, maxlen=ys_pad_lens.max())[:, :, None]).to(
             ys_pad.device
         )
@@ -384,6 +462,14 @@ class Paraformer(torch.nn.Module):
         ys_pad_lens: torch.Tensor,
     ):
         # Calc CTC loss
+        """Internal: calc ctc loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         loss_ctc = self.ctc(encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
 
         # Calc CER using CTC
@@ -397,6 +483,11 @@ class Paraformer(torch.nn.Module):
         self,
         **kwargs,
     ):
+        """Init beam search.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         from funasr.models.paraformer.search import BeamSearchPara
         from funasr.models.transformer.scorers.ctc import CTCPrefixScorer
         from funasr.models.transformer.scorers.length_bonus import LengthBonus
@@ -450,11 +541,25 @@ class Paraformer(torch.nn.Module):
         **kwargs,
     ):
         # init beamsearch
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         is_use_ctc = kwargs.get("decoding_ctc_weight", 0.0) > 0.00001 and self.ctc != None
         is_use_lm = (
             kwargs.get("lm_weight", 0.0) > 0.00001 and kwargs.get("lm_file", None) is not None
         )
-        pred_timestamp = kwargs.get("pred_timestamp", False)
+        pred_timestamp = (
+            kwargs["pred_timestamp"]
+            if "pred_timestamp" in kwargs
+            else kwargs.get("output_timestamp", False)
+        )
         if self.beam_search is None and (is_use_lm or is_use_ctc):
             logging.info("enable beam_search")
             self.init_beam_search(**kwargs)
@@ -570,9 +675,23 @@ class Paraformer(torch.nn.Module):
                     text_postprocessed = tokenizer.tokens2text(token)
                     
                     if pred_timestamp:
+                        timestamp_pre_peak_index = pre_peak_index[i]
+                        timestamp_alphas = alphas[i]
+                        predictor = getattr(self, "predictor", None)
+                        if getattr(predictor, "tail_mask", None) is True:
+                            timestamp_len = int(encoder_out_lens[i].item())
+                            if float(getattr(predictor, "tail_threshold", 0.0)) > 0.0:
+                                timestamp_len += 1
+                            timestamp_len = min(
+                                timestamp_len,
+                                timestamp_pre_peak_index.shape[-1],
+                                timestamp_alphas.shape[-1],
+                            )
+                            timestamp_pre_peak_index = timestamp_pre_peak_index[:timestamp_len]
+                            timestamp_alphas = timestamp_alphas[:timestamp_len]
                         timestamp_str, timestamp = ts_prediction_lfr6_standard(
-                            pre_peak_index[i],
-                            alphas[i],
+                            timestamp_pre_peak_index,
+                            timestamp_alphas,
                             copy.copy(token),
                             vad_offset=kwargs.get("begin_time", 0),
                             upsample_rate=1,
@@ -596,6 +715,11 @@ class Paraformer(torch.nn.Module):
         return results, meta_data
 
     def export(self, **kwargs):
+        """Export.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         from .export_meta import export_rebuild_model
 
         if "max_seq_len" not in kwargs:

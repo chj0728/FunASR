@@ -29,20 +29,27 @@ from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 
 
 if LooseVersion(torch.__version__) >= LooseVersion("1.6.0"):
-    from torch.cuda.amp import autocast
+    from funasr.utils.amp import autocast
 else:
     # Nothing to do if torch<1.6.0
     @contextmanager
     def autocast(enabled=True):
+        """Autocast.
+        
+            Args:
+                enabled: TODO.
+            """
         yield
 
 
 @tables.register("model_classes", "ContextualParaformer")
 class ContextualParaformer(Paraformer):
-    """
-    Author: Speech Lab of DAMO Academy, Alibaba Group
-    FunASR: A Fundamental End-to-End Speech Recognition Toolkit
-    https://arxiv.org/abs/2305.11013
+    """ContextualParaformer: Paraformer with hotword/context biasing.
+
+    Extends Paraformer with a context encoder that incorporates user-defined
+    hotwords/keywords to boost recognition of domain-specific terms.
+
+    Usage: Pass hotwords via generate(hotword='term1 term2').
     """
 
     def __init__(
@@ -50,6 +57,12 @@ class ContextualParaformer(Paraformer):
         *args,
         **kwargs,
     ):
+        """Initialize ContextualParaformer.
+        
+            Args:
+                *args: Variable positional arguments.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__(*args, **kwargs)
 
         self.target_buffer_length = kwargs.get("target_buffer_length", -1)
@@ -165,6 +178,16 @@ class ContextualParaformer(Paraformer):
         hotword_pad: torch.Tensor,
         hotword_lengths: torch.Tensor,
     ):
+        """Internal: calc att clas loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+                hotword_pad: TODO.
+                hotword_lengths: Lengths of hotword.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -251,6 +274,16 @@ class ContextualParaformer(Paraformer):
         pre_acoustic_embeds,
         contextual_info,
     ):
+        """Sampler.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+                pre_acoustic_embeds: TODO.
+                contextual_info: TODO.
+            """
         tgt_mask = (~make_pad_mask(ys_pad_lens, maxlen=ys_pad_lens.max())[:, :, None]).to(
             ys_pad.device
         )
@@ -304,6 +337,16 @@ class ContextualParaformer(Paraformer):
         hw_list=None,
         clas_scale=1.0,
     ):
+        """Cal decoder with predictor.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                sematic_embeds: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+                hw_list: TODO.
+                clas_scale: TODO.
+            """
         if hw_list is None:
             hw_list = [torch.Tensor([1]).long().to(encoder_out.device)]  # empty hotword list
             hw_list_pad = pad_list(hw_list, 0)
@@ -352,6 +395,16 @@ class ContextualParaformer(Paraformer):
     ):
         # init beamsearch
 
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         is_use_ctc = kwargs.get("decoding_ctc_weight", 0.0) > 0.00001 and self.ctc != None
         is_use_lm = (
             kwargs.get("lm_weight", 0.0) > 0.00001 and kwargs.get("lm_file", None) is not None
@@ -479,7 +532,19 @@ class ContextualParaformer(Paraformer):
         return results, meta_data
 
     def generate_hotwords_list(self, hotword_list_or_file, tokenizer=None, frontend=None):
+        """Generate hotwords list.
+        
+            Args:
+                hotword_list_or_file: TODO.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+            """
         def load_seg_dict(seg_dict_file):
+            """Load seg dict.
+            
+                Args:
+                    seg_dict_file: TODO.
+                """
             seg_dict = {}
             assert isinstance(seg_dict_file, str)
             with open(seg_dict_file, "r", encoding="utf8") as f:
@@ -492,6 +557,12 @@ class ContextualParaformer(Paraformer):
             return seg_dict
 
         def seg_tokenize(txt, seg_dict):
+            """Seg tokenize.
+            
+                Args:
+                    txt: TODO.
+                    seg_dict: TODO.
+                """
             pattern = re.compile(r"^[\u4E00-\u9FA50-9]+$")
             out_txt = ""
             for word in txt:
@@ -589,6 +660,11 @@ class ContextualParaformer(Paraformer):
         self,
         **kwargs,
     ):
+        """Export.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         if "max_seq_len" not in kwargs:
             kwargs["max_seq_len"] = 512
         from .export_meta import export_rebuild_model

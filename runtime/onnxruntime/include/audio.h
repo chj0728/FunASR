@@ -24,6 +24,7 @@ class AudioFrame {
     AudioFrame();
     AudioFrame(int len);
     AudioFrame(const AudioFrame &other);
+    AudioFrame& operator=(const AudioFrame &other);
     AudioFrame(int start, int end, bool is_final);
 
     ~AudioFrame();
@@ -100,6 +101,8 @@ class DLLAPI Audio {
     int offset = 0;
     int speech_start=-1, speech_end=0;
     int speech_offline_start=-1;
+    int64_t start = 0;
+    int64_t end = 0;
 
     int seg_sample = MODEL_SAMPLE_RATE/1000;
     bool LoadPcmwavOnline(const char* buf, int n_file_len, int32_t* sampling_rate);

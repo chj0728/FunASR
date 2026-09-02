@@ -5,7 +5,7 @@ import time
 import torch
 import numpy as np
 import torch.nn as nn
-from torch.cuda.amp import autocast
+from funasr.utils.amp import autocast
 
 from funasr.losses.label_smoothing_loss import LabelSmoothingLoss
 from funasr.models.ctc.ctc import CTC
@@ -20,7 +20,13 @@ from funasr.register import tables
 
 @tables.register("model_classes", "OpenAIWhisperModel")
 class OpenAIWhisperModel(nn.Module):
-    """CTC-attention hybrid Encoder-Decoder model"""
+    """Whisper-LID: Language Identification using OpenAI Whisper encoder.
+
+    Detects spoken language from audio input. Supports 99 languages.
+    Uses Whisper encoder features with a classification head.
+
+    Output: {"key": str, "text": str (language code)}
+    """
 
     def __init__(
         self,
@@ -55,6 +61,36 @@ class OpenAIWhisperModel(nn.Module):
         **kwargs,
     ):
 
+        """Initialize OpenAIWhisperModel.
+        
+            Args:
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                encoder: TODO.
+                encoder_conf: Configuration dict for encoder.
+                decoder: TODO.
+                decoder_conf: Configuration dict for decoder.
+                ctc: TODO.
+                ctc_conf: Configuration dict for ctc.
+                ctc_weight: TODO.
+                interctc_weight: TODO.
+                input_size: Size/dimension parameter.
+                vocab_size: Size/dimension parameter.
+                ignore_id: TODO.
+                blank_id: TODO.
+                sos: TODO.
+                eos: TODO.
+                lsm_weight: TODO.
+                length_normalized_loss: TODO.
+                report_cer: TODO.
+                report_wer: TODO.
+                sym_space: TODO.
+                sym_blank: TODO.
+                share_embedding: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         if specaug is not None:
@@ -264,6 +300,14 @@ class OpenAIWhisperModel(nn.Module):
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
     ):
+        """Internal: calc att loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
         ys_in_lens = ys_pad_lens + 1
 
@@ -295,6 +339,14 @@ class OpenAIWhisperModel(nn.Module):
         ys_pad_lens: torch.Tensor,
     ):
         # Calc CTC loss
+        """Internal: calc ctc loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         loss_ctc = self.ctc(encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
 
         # Calc CER using CTC
@@ -308,6 +360,11 @@ class OpenAIWhisperModel(nn.Module):
         self,
         **kwargs,
     ):
+        """Init beam search.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         from funasr.models.transformer.search import BeamSearch
         from funasr.models.transformer.scorers.ctc import CTCPrefixScorer
         from funasr.models.transformer.scorers.length_bonus import LengthBonus
@@ -359,6 +416,16 @@ class OpenAIWhisperModel(nn.Module):
         **kwargs,
     ):
 
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         if kwargs.get("batch_size", 1) > 1:
             raise NotImplementedError("batch decoding is not implemented")
 
@@ -472,6 +539,21 @@ class OpenAIWhisperLIDModel(nn.Module):
         random_clip: bool = False,
         **kwargs,
     ):
+        """Initialize OpenAIWhisperLIDModel.
+        
+            Args:
+                vocab_size: Size/dimension parameter.
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                encoder: TODO.
+                encoder_conf: Configuration dict for encoder.
+                lid_predictor: TODO.
+                lid_predictor_conf: Configuration dict for lid_predictor.
+                proj_dim: Size/dimension parameter.
+                clip_frames: TODO.
+                random_clip: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         if specaug is not None:
             specaug_class = tables.specaug_classes.get(specaug)
@@ -509,6 +591,14 @@ class OpenAIWhisperLIDModel(nn.Module):
         lid: torch.Tensor,  # lid label, (batch_size, 1)
         lid_lengths: torch.Tensor,
     ):
+        """Forward pass for training.
+        
+            Args:
+                speech: Speech audio tensor, shape (batch, time).
+                speech_lengths: Length of each speech sample.
+                lid: TODO.
+                lid_lengths: Lengths of lid.
+            """
         assert lid.shape[1] == 1
         batch_size = speech.shape[0]
         encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
@@ -611,6 +701,16 @@ class OpenAIWhisperLIDModel(nn.Module):
         **kwargs,
     ):
 
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         if kwargs.get("batch_size", 1) > 1:
             raise NotImplementedError("batch decoding is not implemented")
 

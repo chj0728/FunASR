@@ -30,7 +30,7 @@ FunASR离线文件转写软件包，提供了一款功能强大的语音离线�
 
 详细性能测试报告（[点击此处](./benchmark_onnx_cpp.md)）
 
-云服务厂商，针对新用户，有3个月免费试用活动，申请教程（[点击此处](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/aliyun_server_tutorial.md)）
+云服务厂商，针对新用户，有3个月免费试用活动，申请教程（[点击此处](https://github.com/modelscope/FunASR/blob/main/runtime/docs/aliyun_server_tutorial.md)）
 
 
 ## 快速上手
@@ -42,7 +42,7 @@ FunASR离线文件转写软件包，提供了一款功能强大的语音离线�
 curl -O https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/shell/install_docker.sh；
 sudo bash install_docker.sh
 ```
-docker安装失败请参考 [Docker Installation](https://alibaba-damo-academy.github.io/FunASR/en/installation/docker.html)
+docker安装失败请参考 [Docker Installation](https://modelscope.github.io/FunASR/installation.html#docker)
 
 ### 镜像启动
 
@@ -241,11 +241,11 @@ kill -9 PID
 FunASR-runtime的代码已开源，如果服务端和客户端不能很好的满足您的需求，您可以根据自己的需求进行进一步的开发：
 ### c++ 客户端：
 
-https://github.com/alibaba-damo-academy/FunASR/tree/main/runtime/websocket
+https://github.com/modelscope/FunASR/tree/main/runtime/websocket
 
 ### python 客户端：
 
-https://github.com/alibaba-damo-academy/FunASR/tree/main/runtime/python/websocket
+https://github.com/modelscope/FunASR/tree/main/runtime/python/websocket
 
 ### 自定义客户端：
 
@@ -262,7 +262,7 @@ FUNASR_RESULT result=FsmnVadInfer(vad_hanlde, wav_file.c_str(), NULL, 16000);
 // 其中：vad_hanlde为FunOfflineInit返回值，wav_file为音频路径，sampling_rate为采样率(默认16k)
 ```
 
-使用示例详见：https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/onnxruntime/bin/funasr-onnx-offline-vad.cpp
+使用示例详见：https://github.com/modelscope/FunASR/blob/main/runtime/onnxruntime/bin/funasr-onnx-offline-vad.cpp
 
 #### ASR
 ```text
@@ -273,7 +273,7 @@ FUNASR_RESULT result=FunOfflineInfer(asr_hanlde, wav_file.c_str(), RASR_NONE, NU
 // 其中：asr_hanlde为FunOfflineInit返回值，wav_file为音频路径，sampling_rate为采样率(默认16k)
 ```
 
-使用示例详见：https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/onnxruntime/bin/funasr-onnx-offline.cpp
+使用示例详见：https://github.com/modelscope/FunASR/blob/main/runtime/onnxruntime/bin/funasr-onnx-offline.cpp
 
 #### PUNC
 ```text
@@ -283,4 +283,4 @@ FUNASR_HANDLE punc_hanlde=CTTransformerInit(model_path, thread_num);
 FUNASR_RESULT result=CTTransformerInfer(punc_hanlde, txt_str.c_str(), RASR_NONE, NULL);
 // 其中：punc_hanlde为CTTransformerInit返回值，txt_str为文本
 ```
-使用示例详见：https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/onnxruntime/bin/funasr-onnx-offline-punc.cpp
+使用示例详见：https://github.com/modelscope/FunASR/blob/main/runtime/onnxruntime/bin/funasr-onnx-offline-punc.cpp

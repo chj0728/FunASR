@@ -11,6 +11,7 @@ import numpy as np
 
 from sklearn.cluster._kmeans import k_means
 from sklearn.cluster import HDBSCAN
+from sklearn.preprocessing import normalize
 
 
 class SpectralCluster:
@@ -19,12 +20,25 @@ class SpectralCluster:
     """
 
     def __init__(self, min_num_spks=1, max_num_spks=15, pval=0.022):
+        """Initialize SpectralCluster.
+        
+            Args:
+                min_num_spks: TODO.
+                max_num_spks: TODO.
+                pval: TODO.
+            """
         self.min_num_spks = min_num_spks
         self.max_num_spks = max_num_spks
         self.pval = pval
 
     def __call__(self, X, oracle_num=None):
         # Similarity matrix computation
+        """Internal: call  .
+        
+            Args:
+                X: TODO.
+                oracle_num: TODO.
+            """
         sim_mat = self.get_sim_mat(X)
 
         # Refining similarity matrix with pval
@@ -46,10 +60,20 @@ class SpectralCluster:
 
     def get_sim_mat(self, X):
         # Cosine similarities
+        """Get sim mat.
+        
+            Args:
+                X: TODO.
+            """
         M = sklearn.metrics.pairwise.cosine_similarity(X, X)
         return M
 
     def p_pruning(self, A):
+        """P pruning.
+        
+            Args:
+                A: TODO.
+            """
         if A.shape[0] * self.pval < 6:
             pval = 6.0 / A.shape[0]
         else:
@@ -67,6 +91,11 @@ class SpectralCluster:
         return A
 
     def get_laplacian(self, M):
+        """Get laplacian.
+        
+            Args:
+                M: TODO.
+            """
         M[np.diag_indices(M.shape[0])] = 0
         D = np.sum(np.abs(M), axis=1)
         D = np.diag(D)
@@ -74,6 +103,12 @@ class SpectralCluster:
         return L
 
     def get_spec_embs(self, L, k_oracle=None):
+        """Get spec embs.
+        
+            Args:
+                L: TODO.
+                k_oracle: TODO.
+            """
         lambdas, eig_vecs = scipy.linalg.eigh(L)
 
         if k_oracle is not None:
@@ -88,10 +123,21 @@ class SpectralCluster:
         return emb, num_of_spk
 
     def cluster_embs(self, emb, k):
+        """Cluster embs.
+        
+            Args:
+                emb: TODO.
+                k: TODO.
+            """
         _, labels, _ = k_means(emb, k)
         return labels
 
     def getEigenGaps(self, eig_vals):
+        """Geteigengaps.
+        
+            Args:
+                eig_vals: TODO.
+            """
         eig_vals_gap_list = []
         for i in range(len(eig_vals) - 1):
             gap = float(eig_vals[i + 1]) - float(eig_vals[i])
@@ -109,6 +155,15 @@ class UmapHdbscan:
     def __init__(
         self, n_neighbors=20, n_components=60, min_samples=10, min_cluster_size=10, metric="cosine"
     ):
+        """Initialize UmapHdbscan.
+        
+            Args:
+                n_neighbors: TODO.
+                n_components: TODO.
+                min_samples: TODO.
+                min_cluster_size: Size/dimension parameter.
+                metric: TODO.
+            """
         self.n_neighbors = n_neighbors
         self.n_components = n_components
         self.min_samples = min_samples
@@ -116,6 +171,11 @@ class UmapHdbscan:
         self.metric = metric
 
     def __call__(self, X):
+        """Internal: call  .
+        
+            Args:
+                X: TODO.
+            """
         import umap.umap_ as umap
 
         umap_X = umap.UMAP(
@@ -132,6 +192,21 @@ class UmapHdbscan:
         return labels
 
 
+class KMeansCluster:
+    r"""Cluster a large set of speaker embeddings into a known number of groups."""
+
+    def __call__(self, X, num_clusters):
+        """Cluster L2-normalized embeddings with bounded memory usage."""
+        normalized_X = normalize(X)
+        _, labels, _ = k_means(
+            normalized_X,
+            num_clusters,
+            random_state=0,
+            n_init=10,
+        )
+        return labels
+
+
 class ClusterBackend(torch.nn.Module):
     r"""Perfom clustering for input embeddings and output the labels.
     Args:
@@ -140,22 +215,35 @@ class ClusterBackend(torch.nn.Module):
     """
 
     def __init__(self, merge_thr=0.78):
+        """Initialize ClusterBackend.
+        
+            Args:
+                merge_thr: TODO.
+            """
         super().__init__()
         self.model_config = {"merge_thr": merge_thr}
         # self.other_config = kwargs
 
         self.spectral_cluster = SpectralCluster()
         self.umap_hdbscan_cluster = UmapHdbscan()
+        self.kmeans_cluster = KMeansCluster()
 
     def forward(self, X, **params):
         # clustering and return the labels
+        """Forward pass for training.
+        
+            Args:
+                X: TODO.
+                **params: Additional keyword arguments.
+            """
         k = params["oracle_num"] if "oracle_num" in params else None
         assert len(X.shape) == 2, "modelscope error: the shape of input should be [N, C]"
         if X.shape[0] < 20:
             return np.zeros(X.shape[0], dtype="int")
-        if X.shape[0] < 2048 or k is not None:
-            # unexpected corner case
+        if X.shape[0] < 2048:
             labels = self.spectral_cluster(X, k)
+        elif k is not None:
+            labels = self.kmeans_cluster(X, k)
         else:
             labels = self.umap_hdbscan_cluster(X)
 
@@ -166,6 +254,13 @@ class ClusterBackend(torch.nn.Module):
 
     def merge_by_cos(self, labels, embs, cos_thr):
         # merge the similar speakers by cosine similarity
+        """Merge by cos.
+        
+            Args:
+                labels: TODO.
+                embs: TODO.
+                cos_thr: TODO.
+            """
         assert cos_thr > 0 and cos_thr <= 1
         while True:
             spk_num = labels.max() + 1

@@ -26,16 +26,29 @@ from funasr.models.campplus.components import (
 
 
 if LooseVersion(torch.__version__) >= LooseVersion("1.6.0"):
-    from torch.cuda.amp import autocast
+    from funasr.utils.amp import autocast
 else:
     # Nothing to do if torch<1.6.0
     @contextmanager
     def autocast(enabled=True):
+        """Autocast.
+        
+            Args:
+                enabled: TODO.
+            """
         yield
 
 
 @tables.register("model_classes", "CAMPPlus")
 class CAMPPlus(torch.nn.Module):
+    """CAM++ Speaker Verification Model.
+
+    Extracts fixed-dimensional speaker embeddings from variable-length audio.
+    Used for speaker verification and speaker diarization pipelines.
+
+    Output: 192-dimensional speaker embedding per utterance.
+    """
+
     def __init__(
         self,
         feat_dim=80,
@@ -48,6 +61,19 @@ class CAMPPlus(torch.nn.Module):
         output_level="segment",
         **kwargs,
     ):
+        """Initialize CAMPPlus.
+        
+            Args:
+                feat_dim: Size/dimension parameter.
+                embedding_size: Size/dimension parameter.
+                growth_rate: TODO.
+                bn_size: Size/dimension parameter.
+                init_channels: TODO.
+                config_str: TODO.
+                memory_efficient: TODO.
+                output_level: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         self.head = FCM(feat_dim=feat_dim)
@@ -113,6 +139,15 @@ class CAMPPlus(torch.nn.Module):
                     torch.nn.init.zeros_(m.bias)
 
     def forward(self, x):
+        """Extract speaker embedding from fbank features.
+
+        Args:
+            x (Tensor): Input fbank features, shape (batch, time, feat_dim).
+
+        Returns:
+            Tensor: Speaker embedding, shape (batch, embedding_size) for segment level,
+                or (batch, time, channels) for frame level.
+        """
         x = x.permute(0, 2, 1)  # (B,T,F) => (B,F,T)
         x = self.head(x)
         x = self.xvector(x)
@@ -129,6 +164,20 @@ class CAMPPlus(torch.nn.Module):
         frontend=None,
         **kwargs,
     ):
+        """Run speaker embedding extraction on audio input.
+
+        Args:
+            data_in: Audio input (file path, numpy array, or list).
+            data_lengths: Not used.
+            key (list): Sample identifiers.
+            tokenizer: Not used.
+            frontend: Not used.
+            **kwargs: Must include 'device' (str) and optional 'fs' (int, default 16000).
+
+        Returns:
+            tuple: (results, meta_data) where results is
+                [{"spk_embedding": Tensor of shape (1, 192)}]
+        """
         # extract fbank feats
         meta_data = {}
         time1 = time.perf_counter()

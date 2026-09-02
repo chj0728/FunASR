@@ -7,6 +7,20 @@ from funasr.download.name_maps_from_hub import name_maps_ms, name_maps_hf, name_
 
 
 def download_model(**kwargs):
+
+    """Download model from hub and parse its configuration.
+
+    Resolves model name aliases, downloads from ModelScope or HuggingFace,
+    reads config.yaml and configuration.json, and returns complete kwargs
+    for model instantiation.
+
+    Args:
+        **kwargs: Must include 'model' (str). Optional: 'hub', 'model_revision',
+            'is_training', etc.
+
+    Returns:
+        dict: Complete kwargs with resolved paths, model class name, and config.
+    """
     hub = kwargs.get("hub", "ms")
     if hub == "ms" or hub == "modelscope":
         kwargs = download_from_ms(**kwargs)
@@ -28,6 +42,11 @@ def download_model(**kwargs):
 
 
 def download_from_ms(**kwargs):
+    """Download from ms.
+    
+        Args:
+            **kwargs: Additional keyword arguments.
+        """
     model_or_path = kwargs.get("model")
     if model_or_path in name_maps_ms:
         model_or_path = name_maps_ms[model_or_path]
@@ -101,6 +120,11 @@ def download_from_ms(**kwargs):
 
 
 def download_from_hf(**kwargs):
+    """Download from hf.
+    
+        Args:
+            **kwargs: Additional keyword arguments.
+        """
     model_or_path = kwargs.get("model")
     if model_or_path in name_maps_hf:
         model_or_path = name_maps_hf[model_or_path]
@@ -166,6 +190,13 @@ def download_from_hf(**kwargs):
 
 def add_file_root_path(model_or_path: str, file_path_metas: dict, cfg={}):
 
+    """Add file root path.
+    
+        Args:
+            model_or_path: TODO.
+            file_path_metas: TODO.
+            cfg: Configuration overrides.
+        """
     if isinstance(file_path_metas, dict):
         if isinstance(cfg, list):
             cfg.append({})

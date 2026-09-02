@@ -27,6 +27,12 @@ class QwenAudioWarp(nn.Module):
     """
 
     def __init__(self, *args, **kwargs):
+        """Initialize QwenAudioWarp.
+        
+            Args:
+                *args: Variable positional arguments.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from transformers.generation import GenerationConfig
@@ -43,6 +49,7 @@ class QwenAudioWarp(nn.Module):
     def forward(
         self,
     ):
+        """Forward pass for training."""
         pass
 
     def inference(
@@ -54,6 +61,16 @@ class QwenAudioWarp(nn.Module):
         frontend=None,
         **kwargs,
     ):
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         if kwargs.get("batch_size", 1) > 1:
             raise NotImplementedError("batch decoding is not implemented")
 
@@ -85,6 +102,12 @@ class QwenAudioWarp(nn.Module):
 @tables.register("model_classes", "QwenAudioChat")
 @tables.register("model_classes", "QwenAudioChatWarp")
 class QwenAudioChatWarp(nn.Module):
+    """QwenAudioChat: Qwen Audio Chat model wrapper.
+
+    Interactive audio chat using the Qwen-Audio-Chat model.
+    Supports multi-turn conversation about audio content.
+    """
+
     def __init__(self, *args, **kwargs):
         """
         Qwen-Audio: Advancing Universal Audio Understanding via Unified Large-Scale Audio-Language Models
@@ -109,6 +132,7 @@ class QwenAudioChatWarp(nn.Module):
     def forward(
         self,
     ):
+        """Forward pass for training."""
         pass
 
     def inference(
@@ -120,6 +144,16 @@ class QwenAudioChatWarp(nn.Module):
         frontend=None,
         **kwargs,
     ):
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         if kwargs.get("batch_size", 1) > 1:
             raise NotImplementedError("batch decoding is not implemented")
 

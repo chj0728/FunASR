@@ -13,13 +13,13 @@ def get_readme():
 
 
 MODULE_NAME = "funasr_onnx"
-VERSION_NUM = "0.4.1"
+VERSION_NUM = "0.4.2"
 
 setuptools.setup(
     name=MODULE_NAME,
     version=VERSION_NUM,
     platforms="Any",
-    url="https://github.com/alibaba-damo-academy/FunASR.git",
+    url="https://github.com/modelscope/FunASR.git",
     author="Speech Lab of DAMO Academy, Alibaba Group",
     author_email="funasr@list.alibaba-inc.com",
     description="FunASR: A Fundamental End-to-End Speech Recognition Toolkit",

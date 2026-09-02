@@ -2,7 +2,7 @@
 
 「简体中文」|「[English](README.md)」
 
-Fun-ASR 是通义实验室推出的端到端语音识别大模型，是基于数千万小时真实语音数据训练而成，具备强大的上下文理解能力与行业适应性，支持低延迟实时听写，并且覆盖 31 个语种。在教育、金融等垂直领域表现出色，能准确识别专业术语与行业表达，有效应对"幻觉"生成和语种混淆等挑战，实现"听得清、懂其意、写得准"。
+Fun-ASR 是通义实验室推出的端到端语音识别大模型，是基于数千万小时真实语音数据训练而成，具备强大的上下文理解能力与行业适应性，支持低延迟实时听写。Fun-ASR-Nano 支持中文、英文、日语，以及 7 种中文方言和 26 种地域口音；独立的 Fun-ASR-MLT-Nano checkpoint 则覆盖 31 个语种。在教育、金融等垂直领域表现出色，能准确识别专业术语与行业表达，有效应对"幻觉"生成和语种混淆等挑战，实现"听得清、懂其意、写得准"。
 
 <div align="center">
 <img src="images/funasr-v2.png">
@@ -34,7 +34,7 @@ Fun-ASR 是通义实验室推出的端到端语音识别大模型，是基于数
 
 # 最新动态 🔥
 
-- 2025/12: [Fun-ASR-Nano-2512](https://modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512) 是一款基于数千万小时真实语音数据训练的端到端语音识别大模型。它支持低延迟实时转写，并涵盖 31 种语言识别功能。
+- 2025/12: [Fun-ASR-Nano-2512](https://modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512) 是一款基于数千万小时真实语音数据训练的端到端语音识别大模型。它支持低延迟实时转写，覆盖中文、英文、日语，以及 7 种中文方言和 26 种地域口音；独立的 Fun-ASR-MLT-Nano checkpoint 则覆盖 31 种语言。
 - 2024/7: [FunASR](https://github.com/modelscope/FunASR) 是一款功能全面的语音识别基础工具包，集成了多项核心功能，包括自动语音识别（ASR）、语音活动检测（VAD）、标点恢复、语言模型、说话人验证、说话人日志记录以及多说话人语音识别。
 
 # 核心特性 🎯
@@ -45,13 +45,13 @@ Fun-ASR 是通义实验室推出的端到端语音识别大模型，是基于数
 - **中文方言与地方口音：**
   - 支持 **7 大方言**：吴语、粤语、闽语、客家话、赣语、湘语、晋语
   - 覆盖 **26 个地区口音**：包括河南、陕西、湖北、四川、重庆、云南、贵州、广东、广西等 20 多个地区
-- **多语言自由说：** 支持 **31 种语言**识别，重点优化东亚与东南亚语种，支持语种自由切换和混合识别。
+- **多语言自由说：** 独立的 **Fun-ASR-MLT-Nano** checkpoint 支持 **31 种语言**识别，重点优化东亚与东南亚语种，支持语种自由切换和混合识别。
 - **音乐背景歌词识别：** 强化在音乐背景干扰下的语音识别性能，支持对歌曲中歌词内容的精准识别。
 
 # 环境安装 🐍
 
 ```shell
-git clone https://github.com/FunAudioLLM/Fun-ASR.git
+git clone https://github.com/QwenAudio/Fun-ASR.git
 cd Fun-ASR
 pip install -r requirements.txt
 ```
@@ -63,6 +63,11 @@ pip install -r requirements.txt
 - [x] 支持返回时间戳
 - [ ] 支持区分说话人识别
 - [x] 支持模型训练
+
+> [!NOTE]
+> 字符级时间戳要求 checkpoint 同时包含完整的 `ctc_decoder.*` 和 `ctc.*` 权重。
+> 当前 `Fun-ASR-MLT-Nano-2512` checkpoint 未包含这些权重，因此 FunASR 会记录警告并仅返回文本，
+> 不再使用未初始化的层生成 `timestamps` 或 `ctc_timestamps`。
 
 # 用法 🛠️
 
@@ -196,6 +201,8 @@ if __name__ == "__main__":
 
 ## 优秀三方工作
 
+- **内置 vLLM 推理引擎**：AutoModelVLLM 解码加速 2-3 倍，流式 WebSocket 服务，tensor parallel 多卡并行。[文档 →](../../../docs/vllm_guide.md)
+- **流式 WebSocket 服务**：实时语音识别 + VAD 分句 + 说话人分离 + 热词定制。[快速上手 →](docs/realtime_demo.md)
 - vLLM (GPU) 最佳部署实践: 使用 vLLM 实现对 Fun-ASR 的加速. [Repository](https://github.com/yuekaizhang/Fun-ASR-vllm)
 
 ## Citations

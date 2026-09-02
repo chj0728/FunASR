@@ -21,7 +21,7 @@ FunASR离线文件转写GPU软件包，提供了一款功能强大的语音离�
 
 详细性能测试报告（[点击此处](./benchmark_onnx_cpp.md)）
 
-云服务厂商，针对新用户，有3个月免费试用活动，申请教程（[点击此处](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/aliyun_server_tutorial.md)）
+云服务厂商，针对新用户，有3个月免费试用活动，申请教程（[点击此处](https://github.com/modelscope/FunASR/blob/main/runtime/docs/aliyun_server_tutorial.md)）
 
 
 ## 快速上手
@@ -33,7 +33,7 @@ FunASR离线文件转写GPU软件包，提供了一款功能强大的语音离�
 curl -O https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/shell/install_docker.sh；
 sudo bash install_docker.sh
 ```
-docker安装失败请参考 [Docker Installation](https://alibaba-damo-academy.github.io/FunASR/en/installation/docker.html)
+docker安装失败请参考 [Docker Installation](https://modelscope.github.io/FunASR/installation.html#docker)
 
 ### 镜像启动
 

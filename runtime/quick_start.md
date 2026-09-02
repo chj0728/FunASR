@@ -11,7 +11,7 @@ You can use FunASR in the following ways:
 ## Service Deployment SDK
 
 ### Python version Example
-Supports real-time streaming speech recognition, uses non-streaming models for error correction, and outputs text with punctuation. Currently, only single client is supported. For multi-concurrency, please refer to the C++ version service deployment SDK below.
+Supports real-time streaming speech recognition, uses non-streaming models for error correction, and outputs text with punctuation. It now supports multiple concurrent clients with non-blocking inference (tune per-stage concurrency via --concurrent_vad / --concurrent_asr_online / --concurrent_asr_offline / --concurrent_punc / --concurrent_sv). For maximum throughput, the C++ version service deployment SDK below is still recommended.
 
 #### Server Deployment
 
@@ -43,7 +43,7 @@ sudo bash install_docker.sh
 ##### Real-time Speech Recognition Service Deployment
 
 ###### Docker Image Download and Launch
-Use the following command to pull and launch the FunASR software package Docker image（[Get the latest image version](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online.md)）：
+Use the following command to pull and launch the FunASR software package Docker image（[Get the latest image version](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online.md)）：
 
 ```shell
 sudo docker pull \
@@ -83,13 +83,13 @@ Testing [samples](https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/sam
 ```shell
 python3 funasr_wss_client.py --host "127.0.0.1" --port 10096 --mode 2pass
 ```
-For more examples, please refer to [docs](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online.md)
+For more examples, please refer to [docs](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online.md)
 
 
 #### File Transcription Service, Mandarin (CPU)
 
 ###### Docker Image Download and Launch
-Use the following command to pull and launch the FunASR software package Docker image（[Get the latest image version](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline.md)）：
+Use the following command to pull and launch the FunASR software package Docker image（[Get the latest image version](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline.md)）：
 
 ```shell
 sudo docker pull \
@@ -130,5 +130,5 @@ Testing [samples](https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/sam
 python3 funasr_wss_client.py --host "127.0.0.1" --port 10095 --mode offline --audio_in "../audio/asr_example.wav"
 ```
 
-For more examples, please refer to [docs](https://github.com/alibaba-damo-academy/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline.md)
+For more examples, please refer to [docs](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_offline.md)
 

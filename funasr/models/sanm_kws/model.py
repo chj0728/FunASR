@@ -6,7 +6,7 @@
 import time
 import torch
 import logging
-from torch.cuda.amp import autocast
+from funasr.utils.amp import autocast
 from typing import Union, Dict, List, Tuple, Optional
 
 from funasr.register import tables
@@ -26,10 +26,12 @@ from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 
 @tables.register("model_classes", "SanmKWS")
 class SanmKWS(torch.nn.Module):
-    """
-    Author: Speech Lab of DAMO Academy, Alibaba Group
-    Paraformer: Fast and Accurate Parallel Transformer for Non-autoregressive End-to-End Speech Recognition
-    https://arxiv.org/abs/2206.08317
+    """SANM-KWS: Self-Attention Neural Memory based Keyword Spotting.
+
+    Advanced keyword spotting using self-attention mechanism
+    for better context modeling of keyword patterns.
+
+    Output: {"key": str, "value": detected_keyword_info}
     """
 
     def __init__(
@@ -52,6 +54,26 @@ class SanmKWS(torch.nn.Module):
         **kwargs,
     ):
 
+        """Initialize SanmKWS.
+        
+            Args:
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                encoder: TODO.
+                encoder_conf: Configuration dict for encoder.
+                ctc: TODO.
+                ctc_conf: Configuration dict for ctc.
+                ctc_weight: TODO.
+                input_size: Size/dimension parameter.
+                vocab_size: Size/dimension parameter.
+                ignore_id: TODO.
+                blank_id: TODO.
+                sos: TODO.
+                eos: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         if specaug is not None:
@@ -167,6 +189,14 @@ class SanmKWS(torch.nn.Module):
         ys_pad_lens: torch.Tensor,
     ):
         # Calc CTC loss
+        """Internal: calc ctc loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         loss_ctc = self.ctc(encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
 
         # Calc CER using CTC
@@ -185,6 +215,16 @@ class SanmKWS(torch.nn.Module):
         frontend=None,
         **kwargs,
     ):
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         keywords = kwargs.get("keywords")
         from funasr.utils.kws_utils import KwsCtcPrefixDecoder
         self.kws_decoder = KwsCtcPrefixDecoder(
@@ -258,6 +298,11 @@ class SanmKWS(torch.nn.Module):
         return results, meta_data
 
     def export(self, **kwargs):
+        """Export.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         from .export_meta import export_rebuild_model
 
         if "max_seq_len" not in kwargs:

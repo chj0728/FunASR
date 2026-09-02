@@ -5,7 +5,7 @@
 Aishell1 [test set](https://www.openslr.org/33/) , the total audio duration is 36108.919 seconds.
 
 ### Tools
-#### Install [modelscope and funasr](https://github.com/alibaba-damo-academy/FunASR#installation)
+#### Install [modelscope and funasr](https://github.com/modelscope/FunASR#installation)
 
 ```shell
 pip3 install torch torchaudio
@@ -13,7 +13,7 @@ pip install -U modelscope
 pip install -U funasr
 ```
 
-#### Export [onnx model](https://github.com/alibaba-damo-academy/FunASR/tree/main/funasr/export)
+#### Export [onnx model](https://github.com/modelscope/FunASR/tree/main/funasr/export)
 
 ```shell
 python -m funasr.export.export_model --model-name damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch --export-dir ./export --type onnx --quantize True
@@ -37,13 +37,13 @@ sudo apt-get install libopenblas-dev #ubuntu
 
 Build runtime
 ```shell
-git clone https://github.com/alibaba-damo-academy/FunASR.git && cd funasr/runtime/onnxruntime
+git clone https://github.com/modelscope/FunASR.git && cd funasr/runtime/onnxruntime
 mkdir build && cd build
 cmake  -DCMAKE_BUILD_TYPE=release .. -DONNXRUNTIME_DIR=/path/to/onnxruntime-linux-x64-1.14.0
 make
 ```
 
-## [Paraformer-large](https://www.modelscope.cn/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) 
+## [Paraformer-large](https://www.modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary)
 ```shell
 ./funasr-onnx-offline-rtf \
     --model-dir    ./damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch \
@@ -51,10 +51,10 @@ make
     --wav-path     ./aishell1_test.scp  \
     --thread-num 32
 
-Node: '--quantize false' means fp32, otherwise it will be int8 
+Node: '--quantize false' means fp32, otherwise it will be int8
 ```
 
-Number of Parameter: 220M 
+Number of Parameter: 220M
 
 Storage size: 880MB
 
@@ -100,7 +100,7 @@ CER after int8-quant: 1.95%
 |  96   (onnx fp32)   |        115s        | 0.003183 |     314      |
 |  96   (onnx int8)   |        80s         | 0.002222 |     450      |
 
-## [FSMN-VAD](https://www.modelscope.cn/models/damo/speech_fsmn_vad_zh-cn-16k-common-onnx/summary) + [Paraformer-large](https://www.modelscope.cn/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) + [CT-Transformer](https://www.modelscope.cn/models/damo/punc_ct-transformer_zh-cn-common-vocab272727-onnx/summary)
+## [FSMN-VAD](https://www.modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-onnx/summary) + [Paraformer-large](https://www.modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) + [CT-Transformer](https://www.modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-onnx/summary)
 
 ```shell
 ./funasr-onnx-offline-rtf \
@@ -111,7 +111,7 @@ CER after int8-quant: 1.95%
     --wav-path     ./aishell1_test.scp  \
     --thread-num 32
 
-Node: '--quantize false' means fp32, otherwise it will be int8 
+Node: '--quantize false' means fp32, otherwise it will be int8
 ```
 
  ### Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz   16core-32processor    with avx512_vnni
@@ -152,7 +152,7 @@ Node: '--quantize false' means fp32, otherwise it will be int8
 
 
 
-## [FSMN-VAD](https://www.modelscope.cn/models/damo/speech_fsmn_vad_zh-cn-16k-common-onnx/summary) + [Paraformer-large](https://www.modelscope.cn/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) +[Ngram](https://www.modelscope.cn/models/damo/speech_ngram_lm_zh-cn-ai-wesp-fst/summary) + [CT-Transformer](https://www.modelscope.cn/models/damo/punc_ct-transformer_zh-cn-common-vocab272727-onnx/summary) 
+## [FSMN-VAD](https://www.modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-onnx/summary) + [Paraformer-large](https://www.modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) +[Ngram](https://www.modelscope.cn/models/damo/speech_ngram_lm_zh-cn-ai-wesp-fst/summary) + [CT-Transformer](https://www.modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-onnx/summary)
 
 ```shell
 ./funasr-onnx-offline-rtf \
@@ -164,7 +164,7 @@ Node: '--quantize false' means fp32, otherwise it will be int8
     --wav-path     ./aishell1_test.scp  \
     --thread-num 32
 
-Node: '--quantize false' means fp32, otherwise it will be int8 
+Node: '--quantize false' means fp32, otherwise it will be int8
 ```
 
  ### Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz   16core-32processor    with avx512_vnni
@@ -197,7 +197,7 @@ Node: '--quantize false' means fp32, otherwise it will be int8
     --wav-path     ./aishell1_test.scp  \
     --thread-num 32
 
-Node: '--quantize false' means fp32, otherwise it will be int8 
+Node: '--quantize false' means fp32, otherwise it will be int8
 ```
 
  ### Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz   16core-32processor    with avx512_vnni
@@ -218,7 +218,7 @@ Node: '--quantize false' means fp32, otherwise it will be int8
 | 96   (onnx int8) |        122s        | 0.0033 |      294      |
 
 
-## [FSMN-VAD](https://www.modelscope.cn/models/damo/speech_fsmn_vad_zh-cn-16k-common-onnx/summary) + [Paraformer-en](https://www.modelscope.cn/models/damo/speech_paraformer-large_asr_nat-en-16k-common-vocab10020-onnx/summary) + [CT-Transformer](https://www.modelscope.cn/models/damo/punc_ct-transformer_zh-cn-common-vocab272727-onnx/summary)
+## [FSMN-VAD](https://www.modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-onnx/summary) + [Paraformer-en](https://www.modelscope.cn/models/damo/speech_paraformer-large_asr_nat-en-16k-common-vocab10020-onnx/summary) + [CT-Transformer](https://www.modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-onnx/summary)
 
 ```shell
 ./funasr-onnx-offline-rtf \
@@ -229,7 +229,7 @@ Node: '--quantize false' means fp32, otherwise it will be int8
     --wav-path     ./librispeech_test_clean.scp  \
     --thread-num 32
 
-Node: '--quantize false' means fp32, otherwise it will be int8 
+Node: '--quantize false' means fp32, otherwise it will be int8
 ```
 
  ### Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz   16core-32processor    with avx512_vnni

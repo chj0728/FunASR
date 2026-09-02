@@ -1,0 +1,167 @@
+([English](./README.md)|[简体中文](./README_zh.md)|日本語|[한국어](./README_ko.md))
+
+<p align="center">
+<a href="https://github.com/modelscope/FunASR"><img src="https://svg-banners.vercel.app/api?type=origin&text1=FunASR🤠&text2=💖%20A%20Fundamental%20End-to-End%20Speech%20Recognition%20Toolkit&width=800&height=210" alt="FunASR"></a>
+</p>
+
+<p align="center">
+  <strong>オフライン、ストリーミング、エッジ展開に対応する産業グレードの音声認識ツールキット。</strong><br>
+  <em>ASR · VAD · 句読点 · 話者パイプライン · 感情/音声イベントモデル · OpenAI互換配信</em>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/funasr/"><img src="https://img.shields.io/pypi/v/funasr" alt="PyPI"></a>
+  <a href="https://github.com/modelscope/FunASR"><img src="https://img.shields.io/github/stars/modelscope/FunASR?style=social" alt="Stars"></a>
+  <a href="https://pypi.org/project/funasr/"><img src="https://img.shields.io/pypi/dm/funasr" alt="Downloads"></a>
+  <a href="https://modelscope.github.io/FunASR/"><img src="https://img.shields.io/badge/ドキュメント-オンライン-blue" alt="Docs"></a>
+</p>
+
+<p align="center">
+<a href="https://trendshift.io/repositories/10479" target="_blank"><img src="https://trendshift.io/api/badge/repositories/10479" alt="modelscope%2FFunASR | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+</p>
+
+<p align="center">
+  <a href="#クイックスタート">クイックスタート</a> · <a href="./examples/colab/README_ja.md">Colab</a> · <a href="./docs/model_selection_ja.md">モデル選択</a> · <a href="#ベンチマーク">ベンチマーク</a> · <a href="./docs/migration_from_whisper.md">Migration guide</a> · <a href="./docs/use_case_showcase.md">Use cases</a> · <a href="./docs/deployment_matrix_ja.md">Deployment matrix</a> · <a href="#モデル一覧">モデル一覧</a> · <a href="https://modelscope.github.io/FunASR/agent.html">Agent連携</a> · <a href="https://modelscope.github.io/FunASR/">ドキュメント</a>
+</p>
+
+---
+
+<a name="クイックスタート"></a>
+
+## クイックスタート
+
+```bash
+pip install funasr
+```
+
+```python
+from funasr import AutoModel
+
+model = AutoModel(model="iic/SenseVoiceSmall", vad_model="fsmn-vad", spk_model="cam++", device="cuda")
+result = model.generate(input="meeting.wav")
+```
+
+**出力** — 話者ラベル・タイムスタンプ・句読点付きの構造化テキスト：
+```
+[00:00.4 → 00:03.8] 話者0: Q3の計画について話し合いましょう。
+[00:04.2 → 00:07.1] 話者1: いいですね。3つのポイントがあります。
+[00:07.5 → 00:12.3] 話者0: どうぞ。あと30分あります。
+```
+
+これは1回の `AutoModel` パイプライン呼び出しですが、SenseVoiceSmall、
+FSMN-VAD、CAM++という独立したモデルを組み合わせています。話者分離は
+SenseVoiceSmall自体ではなく、CAM++によって提供されます。
+
+初めて使う場合は [Colab クイックスタート](./examples/colab/README_ja.md) から試せます。どのモデルを選ぶか迷う場合は [モデル選択ガイド](./docs/model_selection_ja.md) を参照してください。
+
+> **APIサーバーとしてデプロイ：** `funasr-server --device cuda` → localhost:8000でOpenAI互換エンドポイント
+>
+> **AIエージェント連携：** [MCPサーバー](examples/mcp_server/) Claude/Cursor対応 · [OpenAI API](examples/openai_api/) LangChain/Dify/AutoGen対応
+
+### なぜFunASRを選ぶのか？
+
+Whisper は単一モデルですが、**FunASR はツールキット**です——用途に応じて
+**Fun-ASR-Nano**（中・英・日と中国語方言・地域アクセント、GPU）、
+**Fun-ASR-MLT-Nano**（31言語）、**SenseVoiceSmall**（5言語ASRと感情・
+音声イベント）、**Paraformer**（低遅延ストリーミング）を選べます。
+下の表はツールキット全体の機能と、それを提供するモデルまたはパイプラインを示します：
+
+| | FunASR（ツールキット） | Whisper | クラウドAPI |
+|---|---|---|---|
+| 最高速度 | **340倍リアルタイム**（Fun-ASR-Nano + vLLM） | 13倍リアルタイム | 〜1倍リアルタイム |
+| 話者認識 | ✅ VAD + CAM++パイプライン | ❌ pyannoteが必要 | ✅ 追加料金 |
+| 感情認識 | ✅ SenseVoice による | ❌ | ❌ |
+| 言語数 | チェックポイントごとに異なる（例：Qwen3-ASR 52、MLT-Nano 31、Nano 中/英/日） | 57 | サービスにより異なる |
+| ストリーミング | ✅ WebSocket（Paraformer） | ❌ | ✅ |
+| CPU対応 | ✅ 17倍リアルタイム（SenseVoice） | ❌ 遅すぎる | 該当なし |
+| セルフホスト | ✅ 対応（ツールキット: MIT、モデルごとに異なる） | ✅ MITライセンス | ❌ クラウドのみ |
+| コスト | 無料 | 無料 | $0.006/分〜 |
+
+---
+
+<a name="ベンチマーク"></a>
+
+## ベンチマーク
+
+> 184件の長時間音声（計192分）。[詳細レポート →](https://modelscope.github.io/FunASR/benchmark.html)
+
+| モデル | 中国語 CER ↓ | GPU速度 | CPU速度 | Whisper-large-v3比 |
+|--------|------|---------|---------|-------------------|
+| **Fun-ASR-Nano**（vLLM） | **8.20%** | **340倍**リアルタイム | — | 🚀 **26倍高速** |
+| **SenseVoice-Small** | **7.81%** | **170倍**リアルタイム | **17倍**リアルタイム | 🚀 **13倍高速** |
+| **Paraformer-Large** | 10.18% | **120倍**リアルタイム | **15倍**リアルタイム | 🚀 **9倍高速** |
+| Whisper-large-v3-turbo | 21.71% | 46倍リアルタイム | ❌ | 3.4倍高速 |
+| Whisper-large-v3 | 20.02% | 13倍リアルタイム | ❌ | ベースライン |
+
+> **ポイント：** FunASRのCPU速度は、WhisperのGPU速度より速い。
+
+---
+
+## 最新情報
+
+- **MOSS-Transcribe-Diarize** を FunASR service、Docker、Kubernetes、vLLM/SGLang workflow、FunClip に統合し、長時間 ASR、timestamp、匿名 speaker label を一度に処理できます。[MOSS をデプロイ ->](./docs/moss_transcribe_diarize.md)
+- **FunASR 1.4.12** は、audio compute が FP16 のときの Fun-ASR-Nano vLLM 出力を安定化します。Qwen3 decoder は BF16 を使い、BF16 非対応 GPU では FP32 を選択できます。`python -m pip install -U "funasr==1.4.12"`。[Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.12)
+- **Production deployment** に、より高速で安定した realtime serving と、Linux、macOS、Windows の 10 target 向け llama.cpp package を追加しました。[GPU service ->](./docs/vllm_guide.md) · [CPU / edge package ->](https://www.funasr.com/en/deploy/llama-cpp.html)
+
+> 完全な変更履歴と download asset は [GitHub Releases](https://github.com/modelscope/FunASR/releases) を参照してください。
+
+---
+
+## インストール
+
+```bash
+pip install funasr
+```
+
+要件：Python ≥ 3.8、PyTorch ≥ 1.13、torchaudio
+
+---
+
+<a name="モデル一覧"></a>
+
+## モデル一覧
+
+| モデル | タスク | 言語 | パラメータ | リンク |
+|--------|--------|------|-----------|--------|
+| **Fun-ASR-Nano** | 認識 | 中/英/日 + 中国語方言 | 800M | [⭐](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512) [🤗](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512) [GGUF](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF) |
+| **Fun-ASR-MLT-Nano** | 認識 | 31言語 | 800M | [⭐](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-MLT-Nano-2512) [🤗](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512) |
+| **SenseVoiceSmall** | 認識 + 感情 + イベント | 中/英/日/韓/粤 | 234M | [⭐](https://www.modelscope.cn/models/iic/SenseVoiceSmall) [🤗](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) [GGUF](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF) |
+| **Paraformer-zh** | 認識 + タイムスタンプ | 中/英 | 220M | [⭐](https://www.modelscope.cn/models/iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) [🤗](https://huggingface.co/funasr/paraformer-zh) |
+| Qwen3-ASR | 認識、52言語 | 多言語 | 1.7B | [使用法](examples/industrial_data_pretraining/qwen3_asr) |
+| GLM-ASR-Nano | 認識、17言語 | 多言語 | 1.5B | [使用法](examples/industrial_data_pretraining/glm_asr) |
+| Whisper-large-v3-turbo | 認識 + 翻訳 | 多言語 | 809M | [使用法](examples/industrial_data_pretraining/whisper) |
+
+---
+
+## デプロイ
+
+```bash
+# OpenAI互換API（推奨）
+pip install funasr fastapi uvicorn python-multipart
+funasr-server --device cuda
+# オフライン長時間音声 ASR + 匿名 speaker label:
+funasr-server --model moss-transcribe-diarize --device cuda:0
+
+# Dockerストリーミングサービス
+docker pull registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
+```
+
+[MOSS service / Docker / Kubernetes / vLLM / SGLang / LocalAI / FunClip guide →](./docs/moss_transcribe_diarize.md)
+
+CPU/エッジで Python なしのオフライン ASR が必要な場合は、llama.cpp / GGUF ランタイムを使えます：[funasr.com/deploy/llama-cpp](https://www.funasr.com/en/deploy/llama-cpp.html) · [Fun-ASR-Nano-GGUF](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF) · [SenseVoiceSmall-GGUF](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF)。
+
+[Colab quickstart →](./examples/colab/README_ja.md) · [OpenAI API example →](./examples/openai_api/README_ja.md) · [Client recipes →](./examples/openai_api/CLIENTS.md) · [Workflow recipes →](./examples/openai_api/WORKFLOWS.md) · [Postman collection →](./examples/openai_api/POSTMAN.md) · [OpenAPI spec →](./examples/openai_api/OPENAPI.md) · [Security guide →](./examples/openai_api/SECURITY.md) · [Deployment matrix →](./docs/deployment_matrix_ja.md) · [デプロイドキュメント →](./runtime/readme.md) · [Agent連携 →](https://modelscope.github.io/FunASR/agent.html)
+
+---
+
+## コミュニティ
+
+|  |  |
+|---|---|
+| 📖 [ドキュメント](https://modelscope.github.io/FunASR/) | 🐛 [Issues](https://github.com/modelscope/FunASR/issues) |
+| 💬 [Discussions](https://github.com/modelscope/FunASR/discussions) | 🤗 [HuggingFace](https://huggingface.co/funasr) |
+
+## ライセンス
+
+- このリポジトリの FunASR ツールキットのソースコード: [MIT License](./LICENSE)。
+- 事前学習済みモデルの重みは個別にライセンスされます。各モデルカードに記載されたライセンスを確認してください。モデルカードがこのリポジトリの [FunASR Model Open Source License Agreement](./MODEL_LICENSE) を参照している場合、その条件が適用されます。

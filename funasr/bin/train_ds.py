@@ -15,7 +15,7 @@ from contextlib import nullcontext
 import torch.distributed as dist
 
 from omegaconf import DictConfig, OmegaConf
-from torch.cuda.amp import autocast, GradScaler
+from funasr.utils.amp import autocast, GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.algorithms.join import Join
@@ -40,9 +40,45 @@ try:
 except:
     deepspeed = None
 
+_DISTRIBUTED_TRAIN_CONF_KEYS = (
+    "use_ddp",
+    "use_fsdp",
+    "use_deepspeed",
+    "deepspeed_config",
+)
+
+
+def _resolve_distributed_config(kwargs, world_size):
+    """Resolve distributed settings with top-level values taking precedence."""
+    train_conf = dict(kwargs.get("train_conf") or {})
+
+    def get_setting(name, default):
+        if name in kwargs:
+            return kwargs[name]
+        return train_conf.get(name, default)
+
+    use_fsdp = get_setting("use_fsdp", False)
+    use_deepspeed = get_setting("use_deepspeed", False)
+    deepspeed_config = get_setting("deepspeed_config", "")
+    if use_deepspeed and use_fsdp:
+        raise ValueError("use_deepspeed and use_fsdp cannot be enabled at the same time")
+
+    trainer_conf = {
+        key: value
+        for key, value in train_conf.items()
+        if key not in _DISTRIBUTED_TRAIN_CONF_KEYS
+    }
+    use_ddp = world_size > 1 and not use_deepspeed and not use_fsdp
+    return use_ddp, use_fsdp, use_deepspeed, deepspeed_config, trainer_conf
+
 
 @hydra.main(config_name=None, version_base=None)
 def main_hydra(kwargs: DictConfig):
+    """Main hydra.
+    
+        Args:
+            kwargs: Additional keyword arguments.
+        """
     if kwargs.get("debug", False):
         import pdb
 
@@ -59,6 +95,11 @@ def main_hydra(kwargs: DictConfig):
 def main(**kwargs):
 
     # set random seed
+    """Main.
+    
+        Args:
+            **kwargs: Additional keyword arguments.
+        """
     set_all_random_seed(kwargs.get("seed", 0))
     torch.backends.cudnn.enabled = kwargs.get("cudnn_enabled", torch.backends.cudnn.enabled)
     torch.backends.cudnn.benchmark = kwargs.get("cudnn_benchmark", torch.backends.cudnn.benchmark)
@@ -73,9 +114,13 @@ def main(**kwargs):
     if local_rank == 0:
         tables.print()
 
-    use_ddp = world_size > 1
-    use_fsdp = kwargs.get("use_fsdp", False)
-    use_deepspeed = kwargs.get("use_deepspeed", False)
+    (
+        use_ddp,
+        use_fsdp,
+        use_deepspeed,
+        deepspeed_config,
+        trainer_conf,
+    ) = _resolve_distributed_config(kwargs, world_size)
     if use_deepspeed:
         logging.info(f"use_deepspeed: {use_deepspeed}")
         deepspeed.init_distributed(dist_backend=kwargs.get("backend", "nccl"))
@@ -110,7 +155,7 @@ def main(**kwargs):
     freeze_param = kwargs.get("freeze_param", None)
     if freeze_param is not None:
         if "," in freeze_param:
-            freeze_param = eval(freeze_param)
+            freeze_param = freeze_param.split(",")
         if not isinstance(freeze_param, (list, tuple)):
             freeze_param = (freeze_param,)
         logging.info("freeze_param is not None: %s", freeze_param)
@@ -133,10 +178,12 @@ def main(**kwargs):
         world_size=world_size,
         use_ddp=use_ddp,
         use_fsdp=use_fsdp,
+        use_deepspeed=use_deepspeed,
+        deepspeed_config=deepspeed_config,
         device=kwargs["device"],
         excludes=kwargs.get("excludes", None),
         output_dir=kwargs.get("output_dir", "./exp"),
-        **kwargs.get("train_conf"),
+        **trainer_conf,
     )
 
     model = trainer.warp_model(model, **kwargs)

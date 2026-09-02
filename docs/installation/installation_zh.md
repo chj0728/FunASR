@@ -2,7 +2,7 @@
 
 <p align="left">
     <a href=""><img src="https://img.shields.io/badge/OS-Linux%2C%20Win%2C%20Mac-brightgreen.svg"></a>
-    <a href=""><img src="https://img.shields.io/badge/Python->=3.7,<=3.10-aff.svg"></a>
+    <a href=""><img src="https://img.shields.io/badge/Python->=3.8,<=3.13-aff.svg"></a>
     <a href=""><img src="https://img.shields.io/badge/Pytorch-%3E%3D1.11-blue"></a>
 </p>
 
@@ -50,7 +50,7 @@ pip3 install -U funasr
 #### 或者从源代码安装
 
 ``` sh
-git clone https://github.com/alibaba/FunASR.git && cd FunASR
+git clone https://github.com/modelscope/FunASR.git && cd FunASR
 pip3 install -e ./
 # 对于中国大陆用户，可以使用以下命令进行安装：
 # pip3 install -e ./ -i https://mirror.sjtu.edu.cn/pypi/web/simple

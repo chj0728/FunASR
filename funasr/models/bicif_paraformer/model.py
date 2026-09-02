@@ -26,22 +26,36 @@ from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 from funasr.train_utils.device_funcs import to_device
 
 if LooseVersion(torch.__version__) >= LooseVersion("1.6.0"):
-    from torch.cuda.amp import autocast
+    from funasr.utils.amp import autocast
 else:
     # Nothing to do if torch<1.6.0
     @contextmanager
     def autocast(enabled=True):
+        """Autocast.
+        
+            Args:
+                enabled: TODO.
+            """
         yield
 
 
 @tables.register("model_classes", "BiCifParaformer")
 class BiCifParaformer(Paraformer):
-    """
+    """BiCifParaformer: Paraformer with Bidirectional CIF for Timestamp Prediction.
+
+    Extends Paraformer with a second CIF predictor that provides accurate
+    character-level timestamp prediction alongside ASR. Uses bidirectional
+    information flow for better alignment between audio frames and text tokens.
+
+    Reference:
+        - FunASR: A Fundamental End-to-End Speech Recognition Toolkit (https://arxiv.org/abs/2305.11013)
+        - Achieving timestamp prediction while recognizing with non-autoregressive end-to-end ASR model
+          (https://arxiv.org/abs/2301.12343)
+
+    Output:
+        {"key": str, "text": str, "timestamp": [[start_ms, end_ms], ...]}
+
     Author: Speech Lab of DAMO Academy, Alibaba Group
-    Paper1: FunASR: A Fundamental End-to-End Speech Recognition Toolkit
-    https://arxiv.org/abs/2305.11013
-    Paper2: Achieving timestamp prediction while recognizing with non-autoregressive end-to-end ASR model
-    https://arxiv.org/abs/2301.12343
     """
 
     def __init__(
@@ -49,6 +63,12 @@ class BiCifParaformer(Paraformer):
         *args,
         **kwargs,
     ):
+        """Initialize BiCifParaformer.
+        
+            Args:
+                *args: Variable positional arguments.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__(*args, **kwargs)
 
     def _calc_pre2_loss(
@@ -58,6 +78,14 @@ class BiCifParaformer(Paraformer):
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
     ):
+        """Internal: calc pre2 loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -80,6 +108,14 @@ class BiCifParaformer(Paraformer):
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
     ):
+        """Internal: calc att loss.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                ys_pad: TODO.
+                ys_pad_lens: Lengths of ys_pad.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -124,6 +160,12 @@ class BiCifParaformer(Paraformer):
         return loss_att, acc_att, cer_att, wer_att, loss_pre
 
     def calc_predictor(self, encoder_out, encoder_out_lens):
+        """Calc predictor.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -133,6 +175,13 @@ class BiCifParaformer(Paraformer):
         return pre_acoustic_embeds, pre_token_length, alphas, pre_peak_index
 
     def calc_predictor_timestamp(self, encoder_out, encoder_out_lens, token_num):
+        """Calc predictor timestamp.
+        
+            Args:
+                encoder_out: Encoder output tensor.
+                encoder_out_lens: Encoder output lengths.
+                token_num: TODO.
+            """
         encoder_out_mask = (
             ~make_pad_mask(encoder_out_lens, maxlen=encoder_out.size(1))[:, None, :]
         ).to(encoder_out.device)
@@ -230,6 +279,16 @@ class BiCifParaformer(Paraformer):
     ):
 
         # init beamsearch
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         is_use_ctc = kwargs.get("decoding_ctc_weight", 0.0) > 0.00001 and self.ctc != None
         is_use_lm = (
             kwargs.get("lm_weight", 0.0) > 0.00001 and kwargs.get("lm_file", None) is not None
@@ -369,6 +428,11 @@ class BiCifParaformer(Paraformer):
         return results, meta_data
 
     def export(self, **kwargs):
+        """Export.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         from .export_meta import export_rebuild_model
 
         if "max_seq_len" not in kwargs:

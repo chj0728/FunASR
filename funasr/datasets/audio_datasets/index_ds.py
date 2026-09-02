@@ -16,6 +16,12 @@ from funasr.register import tables
 class IndexDSJsonlRankFull(torch.utils.data.Dataset):
 
     def __init__(self, path: str, **kwargs):
+        """Initialize IndexDSJsonlRankFull.
+        
+            Args:
+                path: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         self.max_source_length = kwargs.get("max_source_length", 2048)
         self.min_source_length = kwargs.get("min_source_length", 0)
@@ -92,7 +98,8 @@ class IndexDSJsonlRankFull(torch.utils.data.Dataset):
                         target = data["target"]
                         source_len = data.get("source_len", 1)
                         target_len = data.get("target_len", 0)
-                        if "aishell" in source:
+                        text_language = data.get("text_language", "")
+                        if "aishell" in source and text_language != "en":
                             target = target.replace(" ", "")
                         if (
                             source_len < self.min_source_length
@@ -134,17 +141,33 @@ class IndexDSJsonlRankFull(torch.utils.data.Dataset):
         logging.info("total_num of samplers: {}, {}".format(len(self.contents), path))
 
     def __len__(self):
+        """Internal: len  ."""
         return len(self.contents)
 
     def __getitem__(self, index):
 
+        """Internal: getitem  .
+        
+            Args:
+                index: TODO.
+            """
         data = self.contents[index]
 
         return data
 
     def get_source_len(self, data_dict):
+        """Get source len.
+        
+            Args:
+                data_dict: TODO.
+            """
         return data_dict.get("source_len", 1)
 
     def get_target_len(self, data_dict):
 
+        """Get target len.
+        
+            Args:
+                data_dict: TODO.
+            """
         return data_dict.get("target_len", 0)

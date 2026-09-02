@@ -22,11 +22,16 @@ from funasr.frontends.abs_frontend import AbsFrontend
 from funasr.train_utils.device_funcs import force_gatherable
 
 if LooseVersion(torch.__version__) >= LooseVersion("1.6.0"):
-    from torch.cuda.amp import autocast
+    from funasr.utils.amp import autocast
 else:
     # Nothing to do if torch<1.6.0
     @contextmanager
     def autocast(enabled=True):
+        """Autocast.
+        
+            Args:
+                enabled: TODO.
+            """
         yield
 
 
@@ -42,6 +47,15 @@ class Data2VecPretrainModel(nn.Module):
         preencoder=None,
     ):
 
+        """Initialize Data2VecPretrainModel.
+        
+            Args:
+                frontend: Audio frontend for feature extraction.
+                specaug: TODO.
+                normalize: TODO.
+                encoder: TODO.
+                preencoder: TODO.
+            """
         super().__init__()
 
         self.frontend = frontend
@@ -91,6 +105,12 @@ class Data2VecPretrainModel(nn.Module):
     def collect_feats(
         self, speech: torch.Tensor, speech_lengths: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
+        """Collect feats.
+        
+            Args:
+                speech: Speech audio tensor, shape (batch, time).
+                speech_lengths: Length of each speech sample.
+            """
         feats, feats_lengths = self._extract_feats(speech, speech_lengths)
         return {"feats": feats, "feats_lengths": feats_lengths}
 
@@ -130,6 +150,12 @@ class Data2VecPretrainModel(nn.Module):
     def _extract_feats(
         self, speech: torch.Tensor, speech_lengths: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Internal: extract feats.
+        
+            Args:
+                speech: Speech audio tensor, shape (batch, time).
+                speech_lengths: Length of each speech sample.
+            """
         assert speech_lengths.dim() == 1, speech_lengths.shape
 
         # for data-parallel
@@ -147,7 +173,13 @@ class Data2VecPretrainModel(nn.Module):
         return feats, feats_lengths
 
     def set_num_updates(self, num_updates):
+        """Set num updates.
+        
+            Args:
+                num_updates: TODO.
+            """
         self.num_updates = num_updates
 
     def get_num_updates(self):
+        """Get num updates."""
         return self.num_updates

@@ -5,7 +5,7 @@ import copy
 import numpy as np
 import torch
 import torch.nn as nn
-import torchaudio.compliance.kaldi as kaldi
+from funasr.utils import fbank as kaldi
 from torch.nn.utils.rnn import pad_sequence
 
 import funasr.frontends.eend_ola_feature as eend_ola_feature
@@ -13,6 +13,11 @@ from funasr.register import tables
 
 
 def load_cmvn(cmvn_file):
+    """Load cmvn.
+    
+        Args:
+            cmvn_file: TODO.
+        """
     with open(cmvn_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
     means_list = []
@@ -56,6 +61,13 @@ def apply_cmvn(inputs, cmvn):  # noqa
 
 
 def apply_lfr(inputs, lfr_m, lfr_n):
+    """Apply lfr.
+    
+        Args:
+            inputs: TODO.
+            lfr_m: TODO.
+            lfr_n: TODO.
+        """
     LFR_inputs = []
     T = inputs.shape[0]
     T_lfr = int(np.ceil(T / lfr_n))
@@ -96,6 +108,24 @@ class WavFrontend(nn.Module):
         upsacle_samples: bool = True,
         **kwargs,
     ):
+        """Initialize WavFrontend.
+        
+            Args:
+                cmvn_file: TODO.
+                fs: TODO.
+                window: TODO.
+                n_mels: TODO.
+                frame_length: TODO.
+                frame_shift: TODO.
+                filter_length_min: TODO.
+                filter_length_max: TODO.
+                lfr_m: TODO.
+                lfr_n: TODO.
+                dither: TODO.
+                snip_edges: TODO.
+                upsacle_samples: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         self.fs = fs
         self.window = window
@@ -113,6 +143,7 @@ class WavFrontend(nn.Module):
         self.cmvn = None if self.cmvn_file is None else load_cmvn(self.cmvn_file)
 
     def output_size(self) -> int:
+        """Output size."""
         return self.n_mels * self.lfr_m
 
     def forward(
@@ -121,6 +152,13 @@ class WavFrontend(nn.Module):
         input_lengths,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass for training.
+        
+            Args:
+                input: Input audio/text data.
+                input_lengths: Lengths of input.
+                **kwargs: Additional keyword arguments.
+            """
         batch_size = input.size(0)
         feats = []
         feats_lens = []
@@ -160,6 +198,12 @@ class WavFrontend(nn.Module):
     def forward_fbank(
         self, input: torch.Tensor, input_lengths: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward fbank.
+        
+            Args:
+                input: Input audio/text data.
+                input_lengths: Lengths of input.
+            """
         batch_size = input.size(0)
         feats = []
         feats_lens = []
@@ -190,6 +234,12 @@ class WavFrontend(nn.Module):
     def forward_lfr_cmvn(
         self, input: torch.Tensor, input_lengths: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward lfr cmvn.
+        
+            Args:
+                input: Input audio/text data.
+                input_lengths: Lengths of input.
+            """
         batch_size = input.size(0)
         feats = []
         feats_lens = []
@@ -212,6 +262,8 @@ class WavFrontend(nn.Module):
 class WavFrontendOnline(nn.Module):
     """Conventional frontend structure for streaming ASR/VAD."""
 
+    supports_aligned_waveforms = True
+
     def __init__(
         self,
         cmvn_file: str = None,
@@ -229,6 +281,24 @@ class WavFrontendOnline(nn.Module):
         upsacle_samples: bool = True,
         **kwargs,
     ):
+        """Initialize WavFrontendOnline.
+        
+            Args:
+                cmvn_file: TODO.
+                fs: TODO.
+                window: TODO.
+                n_mels: TODO.
+                frame_length: TODO.
+                frame_shift: TODO.
+                filter_length_min: TODO.
+                filter_length_max: TODO.
+                lfr_m: TODO.
+                lfr_n: TODO.
+                dither: TODO.
+                snip_edges: TODO.
+                upsacle_samples: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         self.fs = fs
         self.window = window
@@ -254,6 +324,7 @@ class WavFrontendOnline(nn.Module):
         # self.lfr_splice_cache = []
 
     def output_size(self) -> int:
+        """Output size."""
         return self.n_mels * self.lfr_m
 
     @staticmethod
@@ -311,6 +382,13 @@ class WavFrontendOnline(nn.Module):
     def compute_frame_num(
         sample_length: int, frame_sample_length: int, frame_shift_sample_length: int
     ) -> int:
+        """Compute frame num.
+        
+            Args:
+                sample_length: TODO.
+                frame_sample_length: TODO.
+                frame_shift_sample_length: TODO.
+            """
         frame_num = int((sample_length - frame_sample_length) / frame_shift_sample_length + 1)
         return frame_num if frame_num >= 1 and sample_length >= frame_sample_length else 0
 
@@ -318,9 +396,19 @@ class WavFrontendOnline(nn.Module):
         self,
         input: torch.Tensor,
         input_lengths: torch.Tensor,
-        cache: dict = {},
+        cache: dict = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward fbank.
+        
+            Args:
+                input: Input audio/text data.
+                input_lengths: Lengths of input.
+                cache: State cache dict for streaming inference.
+                **kwargs: Additional keyword arguments.
+            """
+        if cache is None:
+            cache = {}
         batch_size = input.size(0)
 
         input = torch.cat((cache["input_cache"], input), dim=1)
@@ -378,9 +466,20 @@ class WavFrontendOnline(nn.Module):
         input: torch.Tensor,
         input_lengths: torch.Tensor,
         is_final: bool = False,
-        cache: dict = {},
+        cache: dict = None,
         **kwargs,
     ):
+        """Forward lfr cmvn.
+        
+            Args:
+                input: Input audio/text data.
+                input_lengths: Lengths of input.
+                is_final: Whether this is the final chunk in streaming.
+                cache: State cache dict for streaming inference.
+                **kwargs: Additional keyword arguments.
+            """
+        if cache is None:
+            cache = {}
         batch_size = input.size(0)
         feats = []
         feats_lens = []
@@ -406,21 +505,41 @@ class WavFrontendOnline(nn.Module):
         return feats_pad, feats_lens, lfr_splice_frame_idxs
 
     def forward(self, input: torch.Tensor, input_lengths: torch.Tensor, **kwargs):
+        """Forward pass for training.
+        
+            Args:
+                input: Input audio/text data.
+                input_lengths: Lengths of input.
+                **kwargs: Additional keyword arguments.
+            """
         is_final = kwargs.get("is_final", False)
         cache = kwargs.get("cache", {})
         if len(cache) == 0:
             self.init_cache(cache)
+        cache.setdefault("waveform_buffer", None)
+        cache.setdefault("waveform_buffer_start_sample", 0)
+        cache.setdefault("emitted_lfr_frames", 0)
+        cache["aligned_waveforms"] = torch.empty(0)
+        return_waveform = kwargs.get("return_waveform", False)
 
         batch_size = input.shape[0]
         assert (
             batch_size == 1
         ), "we support to extract feature online only when the batch size is equal to 1 now"
+        # VAD opts in to exact score-aligned waveform spans.
+        if return_waveform and input.shape[1] > 0:
+            cache["waveform_buffer"] = (
+                input.clone()
+                if cache["waveform_buffer"] is None
+                else torch.cat((cache["waveform_buffer"], input), dim=1)
+            )
 
         waveforms, feats, feats_lengths = self.forward_fbank(
             input, input_lengths, cache=cache
         )  # input shape: B T D
+        has_fbank_frames = bool(feats.shape[0])
 
-        if feats.shape[0]:
+        if has_fbank_frames:
 
             cache["waveforms"] = torch.cat((cache["reserve_waveforms"], waveforms), dim=1)
 
@@ -483,15 +602,61 @@ class WavFrontendOnline(nn.Module):
                 feats, feats_lengths, _ = self.forward_lfr_cmvn(
                     feats, feats_lengths, is_final, cache=cache
                 )
+
+        if return_waveform and feats.ndim == 3 and feats.shape[1] > 0:
+            score_frame_shift = self.lfr_n * self.frame_shift_sample_length
+            aligned_start = cache["emitted_lfr_frames"] * score_frame_shift
+            aligned_sample_count = (
+                (feats.shape[1] - 1) * score_frame_shift + self.frame_sample_length
+            )
+            aligned_end = aligned_start + aligned_sample_count
+            waveform_buffer = cache["waveform_buffer"]
+            buffer_start = cache["waveform_buffer_start_sample"]
+            buffer_end = buffer_start + (
+                0 if waveform_buffer is None else waveform_buffer.shape[1]
+            )
+            if (
+                waveform_buffer is None
+                or aligned_start < buffer_start
+                or aligned_end > buffer_end
+            ):
+                raise RuntimeError(
+                    "Frontend emitted LFR frames without enough waveform samples: "
+                    f"need [{aligned_start}, {aligned_end}), "
+                    f"have [{buffer_start}, {buffer_end})"
+                )
+            local_start = aligned_start - buffer_start
+            local_end = aligned_end - buffer_start
+            cache["aligned_waveforms"] = waveform_buffer[
+                :, local_start:local_end
+            ].clone()
+            cache["emitted_lfr_frames"] += feats.shape[1]
+
+            next_frame_start = cache["emitted_lfr_frames"] * score_frame_shift
+            next_buffer_start = min(next_frame_start, buffer_end)
+            drop_samples = next_buffer_start - buffer_start
+            cache["waveform_buffer"] = waveform_buffer[:, drop_samples:].clone()
+            cache["waveform_buffer_start_sample"] = next_buffer_start
         # if is_final:
         #     self.init_cache(cache)
         return feats, feats_lengths
 
-    def init_cache(self, cache: dict = {}):
+    def init_cache(self, cache: dict = None):
+        """Init cache.
+        
+            Args:
+                cache: State cache dict for streaming inference.
+            """
+        if cache is None:
+            cache = {}
         cache["reserve_waveforms"] = torch.empty(0)
         cache["input_cache"] = torch.empty(0)
         cache["lfr_splice_cache"] = []
         cache["waveforms"] = None
+        cache["aligned_waveforms"] = torch.empty(0)
+        cache["waveform_buffer"] = None
+        cache["waveform_buffer_start_sample"] = 0
+        cache["emitted_lfr_frames"] = 0
         cache["fbanks"] = None
         cache["fbanks_lens"] = None
         return cache
@@ -509,6 +674,16 @@ class WavFrontendMel23(nn.Module):
         lfr_n: int = 1,
         **kwargs,
     ):
+        """Initialize WavFrontendMel23.
+        
+            Args:
+                fs: TODO.
+                frame_length: TODO.
+                frame_shift: TODO.
+                lfr_m: TODO.
+                lfr_n: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
         self.fs = fs
         self.frame_length = frame_length
@@ -518,11 +693,18 @@ class WavFrontendMel23(nn.Module):
         self.n_mels = 23
 
     def output_size(self) -> int:
+        """Output size."""
         return self.n_mels * (2 * self.lfr_m + 1)
 
     def forward(
         self, input: torch.Tensor, input_lengths: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass for training.
+        
+            Args:
+                input: Input audio/text data.
+                input_lengths: Lengths of input.
+            """
         batch_size = input.size(0)
         feats = []
         feats_lens = []

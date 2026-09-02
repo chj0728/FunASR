@@ -5,7 +5,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import autocast
+from funasr.utils.amp import autocast
 import re
 from funasr.models.scama.utils import sequence_mask
 from funasr.losses.label_smoothing_loss import LabelSmoothingLoss
@@ -26,7 +26,11 @@ dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float3
 
 @tables.register("model_classes", "LLMASR")
 class LLMASR(nn.Module):
-    """ """
+    """LLM-ASR: Large Language Model based Speech Recognition.
+
+    Combines audio encoder with LLM decoder for speech-to-text.
+    Output: {"key": str, "text": str}
+    """
 
     def __init__(
         self,
@@ -64,6 +68,39 @@ class LLMASR(nn.Module):
         **kwargs,
     ):
 
+        """Initialize LLMASR.
+        
+            Args:
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                audio_encoder: TODO.
+                audio_encoder_conf: Configuration dict for audio_encoder.
+                audio_adaptor: TODO.
+                audio_adaptor_conf: Configuration dict for audio_adaptor.
+                decoder: TODO.
+                decoder_conf: Configuration dict for decoder.
+                ctc: TODO.
+                ctc_conf: Configuration dict for ctc.
+                ctc_weight: TODO.
+                llm: TODO.
+                llm_conf: Configuration dict for llm.
+                input_size: Size/dimension parameter.
+                vocab_size: Size/dimension parameter.
+                ignore_id: TODO.
+                blank_id: TODO.
+                sos: TODO.
+                eos: TODO.
+                lsm_weight: TODO.
+                length_normalized_loss: TODO.
+                report_cer: TODO.
+                report_wer: TODO.
+                sym_space: TODO.
+                sym_blank: TODO.
+                share_embedding: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         if specaug is not None:
@@ -224,6 +261,13 @@ class LLMASR(nn.Module):
         speech_lengths: torch.Tensor,
         **kwargs,
     ):
+        """Encode.
+        
+            Args:
+                speech: Speech audio tensor, shape (batch, time).
+                speech_lengths: Length of each speech sample.
+                **kwargs: Additional keyword arguments.
+            """
         speech = speech.permute(0, 2, 1)
         res = self.audio_encoder(speech)
         if isinstance(res, (list, tuple)):
@@ -242,6 +286,16 @@ class LLMASR(nn.Module):
         **kwargs,
     ):
 
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         prompt = kwargs.get("prompt", "Transcribe speech to text.")
 
         if kwargs.get("batch_size", 1) > 1:
@@ -385,6 +439,39 @@ class LLMASR2(nn.Module):
         **kwargs,
     ):
 
+        """Initialize LLMASR2.
+        
+            Args:
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                audio_encoder: TODO.
+                audio_encoder_conf: Configuration dict for audio_encoder.
+                audio_adaptor: TODO.
+                audio_adaptor_conf: Configuration dict for audio_adaptor.
+                decoder: TODO.
+                decoder_conf: Configuration dict for decoder.
+                ctc: TODO.
+                ctc_conf: Configuration dict for ctc.
+                ctc_weight: TODO.
+                llm: TODO.
+                llm_conf: Configuration dict for llm.
+                input_size: Size/dimension parameter.
+                vocab_size: Size/dimension parameter.
+                ignore_id: TODO.
+                blank_id: TODO.
+                sos: TODO.
+                eos: TODO.
+                lsm_weight: TODO.
+                length_normalized_loss: TODO.
+                report_cer: TODO.
+                report_wer: TODO.
+                sym_space: TODO.
+                sym_blank: TODO.
+                share_embedding: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         # audio encoder
@@ -496,7 +583,7 @@ class LLMASR2(nn.Module):
 
         batch_size, frames, _ = speech.shape
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with autocast(enabled=False):
             # audio encoder
             encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
 
@@ -531,7 +618,7 @@ class LLMASR2(nn.Module):
                     batch_idx, :min_len, :
                 ]
 
-        with torch.cuda.amp.autocast(
+        with autocast(
             enabled=True if self.llm_dtype != "fp32" else False, dtype=dtype_map[self.llm_dtype]
         ):
             labels_ids[labels_ids == -1] = -100
@@ -566,11 +653,22 @@ class LLMASR2(nn.Module):
 
     def encode(self, speech, speech_lengths):
         # audio encoder
+        """Encode.
+        
+            Args:
+                speech: Speech audio tensor, shape (batch, time).
+                speech_lengths: Length of each speech sample.
+            """
         encoder_out, encoder_out_lens = self.audio_encoder(speech.permute(0, 2, 1), speech_lengths)
 
         return encoder_out, encoder_out_lens
 
     def data_template(self, data):
+        """Data template.
+        
+            Args:
+                data: TODO.
+            """
         system, user, assistant = [], [], []
         for i, item in enumerate(data):
             role = item["role"]
@@ -594,6 +692,15 @@ class LLMASR2(nn.Module):
 
     def data_load_speech(self, contents: dict, tokenizer, frontend, meta_data={}, **kwargs):
 
+        """Data load speech.
+        
+            Args:
+                contents: TODO.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                meta_data: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         system = contents["system"]
         user = contents["user"]
         assistant = contents["assistant"]
@@ -720,6 +827,16 @@ class LLMASR2(nn.Module):
         **kwargs,
     ):
 
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         meta_data = {}
         prompt = kwargs.get("prompt", None)
 
@@ -766,7 +883,7 @@ class LLMASR2(nn.Module):
             llm_dtype = "fp16" if kwargs.get("fp16", False) else llm_dtype
             llm_dtype = "bf16" if kwargs.get("bf16", False) else llm_dtype
 
-        with torch.cuda.amp.autocast(
+        with autocast(
             enabled=True if llm_dtype != "fp32" else False, dtype=dtype_map[llm_dtype]
         ):
             label = contents["assistant"][0]
@@ -836,10 +953,22 @@ class LLMASR3(LLMASR2):
         **kwargs,
     ):
 
+        """Initialize LLMASR3.
+        
+            Args:
+                *args: Variable positional arguments.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__(*args, **kwargs)
 
     def encode(self, speech, speech_lengths):
         # audio encoder
+        """Encode.
+        
+            Args:
+                speech: Speech audio tensor, shape (batch, time).
+                speech_lengths: Length of each speech sample.
+            """
         encoder_out, encoder_out_lens = self.audio_encoder(speech, speech_lengths)
         return encoder_out, encoder_out_lens
 
@@ -884,6 +1013,39 @@ class LLMASR4(nn.Module):
         **kwargs,
     ):
 
+        """Initialize LLMASR4.
+        
+            Args:
+                specaug: TODO.
+                specaug_conf: Configuration dict for specaug.
+                normalize: TODO.
+                normalize_conf: Configuration dict for normalize.
+                audio_encoder: TODO.
+                audio_encoder_conf: Configuration dict for audio_encoder.
+                audio_adaptor: TODO.
+                audio_adaptor_conf: Configuration dict for audio_adaptor.
+                decoder: TODO.
+                decoder_conf: Configuration dict for decoder.
+                ctc: TODO.
+                ctc_conf: Configuration dict for ctc.
+                ctc_weight: TODO.
+                llm: TODO.
+                llm_conf: Configuration dict for llm.
+                input_size: Size/dimension parameter.
+                vocab_size: Size/dimension parameter.
+                ignore_id: TODO.
+                blank_id: TODO.
+                sos: TODO.
+                eos: TODO.
+                lsm_weight: TODO.
+                length_normalized_loss: TODO.
+                report_cer: TODO.
+                report_wer: TODO.
+                sym_space: TODO.
+                sym_blank: TODO.
+                share_embedding: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__()
 
         # audio encoder
@@ -997,7 +1159,7 @@ class LLMASR4(nn.Module):
         batch_size_speech, frames, _ = speech.shape
         batch_size, token_num = input_ids.shape
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with autocast(enabled=False):
             # audio encoder
             encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
 
@@ -1041,7 +1203,7 @@ class LLMASR4(nn.Module):
 
                     speech_idx += 1
 
-        with torch.cuda.amp.autocast(
+        with autocast(
             enabled=True if self.llm_dtype != "fp32" else False, dtype=dtype_map[self.llm_dtype]
         ):
             labels_ids[labels_ids == -1] = -100
@@ -1083,11 +1245,22 @@ class LLMASR4(nn.Module):
 
     def encode(self, speech, speech_lengths):
         # audio encoder
+        """Encode.
+        
+            Args:
+                speech: Speech audio tensor, shape (batch, time).
+                speech_lengths: Length of each speech sample.
+            """
         encoder_out, encoder_out_lens = self.audio_encoder(speech.permute(0, 2, 1), speech_lengths)
 
         return encoder_out, encoder_out_lens
 
     def data_template(self, data):
+        """Data template.
+        
+            Args:
+                data: TODO.
+            """
         system, user, assistant = [], [], []
         for i, item in enumerate(data):
             role = item["role"]
@@ -1111,6 +1284,15 @@ class LLMASR4(nn.Module):
 
     def data_load_speech(self, contents: dict, tokenizer, frontend, meta_data={}, **kwargs):
 
+        """Data load speech.
+        
+            Args:
+                contents: TODO.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                meta_data: TODO.
+                **kwargs: Additional keyword arguments.
+            """
         system = contents["system"]
         user = contents["user"]
         assistant = contents["assistant"]
@@ -1258,6 +1440,16 @@ class LLMASR4(nn.Module):
         **kwargs,
     ):
 
+        """Inference prepare.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         meta_data = {}
         prompt = kwargs.get("prompt", None)
 
@@ -1340,6 +1532,16 @@ class LLMASR4(nn.Module):
         **kwargs,
     ):
 
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                **kwargs: Additional keyword arguments.
+            """
         inputs_embeds, contents, batch, source_ids, meta_data = self.inference_prepare(
             data_in, data_lengths, key, tokenizer, frontend, **kwargs
         )
@@ -1349,7 +1551,7 @@ class LLMASR4(nn.Module):
             llm_dtype = "fp16" if kwargs.get("fp16", False) else llm_dtype
             llm_dtype = "bf16" if kwargs.get("bf16", False) else llm_dtype
 
-        with torch.cuda.amp.autocast(
+        with autocast(
             enabled=True if llm_dtype != "fp32" else False, dtype=dtype_map[llm_dtype]
         ):
             label = contents["assistant"][-1]

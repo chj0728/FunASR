@@ -71,6 +71,10 @@ Overview
    :maxdepth: 1
    :caption: Runtime and Service
 
+   ./deployment_matrix.md
+   ./deployment_matrix_zh.md
+   ./moss_transcribe_diarize.md
+   ./moss_transcribe_diarize_zh.md
    ./runtime/readme.md
    ./runtime/docs/SDK_tutorial_online.md
    ./runtime/docs/SDK_tutorial.md
@@ -82,6 +86,8 @@ Overview
    :maxdepth: 1
    :caption: Benchmark and Leaderboard
 
+   ./benchmark/rtf_reproducibility.md
+   ./benchmark/realtime_ws_benchmark.md
    ./benchmark/benchmark_onnx.md
    ./benchmark/benchmark_onnx_cpp.md
    ./benchmark/benchmark_libtorch.md
@@ -104,11 +110,19 @@ Overview
    :maxdepth: 1
    :caption: Application
 
+   ./model_selection.md
+   ./model_selection_zh.md
+   ./migration_from_whisper.md
+   ./migration_from_whisper_zh.md
+   ./cli.md
+   ./use_case_showcase.md
+   ./use_case_showcase_zh.md
+   ./community_projects.md
    ./reference/application.md
 
 .. toctree::
    :maxdepth: 1
-   :caption: FQA
+   :caption: FAQ and Troubleshooting
 
    ./reference/FQA.md
 

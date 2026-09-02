@@ -8,6 +8,7 @@ import time
 import copy
 import torch
 import random
+import re
 import string
 import logging
 import os.path
@@ -28,14 +29,19 @@ from funasr.utils.load_utils import load_audio_text_image_video
 from funasr.train_utils.set_all_random_seed import set_all_random_seed
 from funasr.train_utils.load_pretrained_model import load_pretrained_model
 from funasr.utils import export_utils
+from funasr.utils.postprocess_hotwords import apply_postprocess_hotwords_to_results
 from funasr.utils import misc
+
+
 def is_npu_available():
     """检查NPU是否可用。"""
     try:
         import torch_npu
+
         return torch_npu.npu.is_available()
     except ImportError:
         return False
+
 
 def _resolve_ncpu(config, fallback=4):
     """Return a positive integer representing CPU threads from config."""
@@ -45,6 +51,291 @@ def _resolve_ncpu(config, fallback=4):
     except (TypeError, ValueError):
         value = fallback
     return max(value, 1)
+
+
+def _join_vad_texts(texts):
+    """Remove rich tags and join VAD text without adding spaces between Chinese chunks."""
+    cleaned = [re.sub(r"<\|[^|]*\|>", "", text).strip() for text in texts]
+    cleaned = [text for text in cleaned if text]
+    if not cleaned:
+        return ""
+    joined = cleaned[0]
+    for text in cleaned[1:]:
+        separator = ""
+        if not ("\u3400" <= joined[-1] <= "\u9fff" and "\u3400" <= text[0] <= "\u9fff"):
+            separator = " "
+        joined += separator + text
+    return joined
+
+
+def _vad_segment_sentences(restored_data, vadsegments):
+    """Build readable sentence records directly from VAD-aligned ASR chunks."""
+    sentences = []
+    for result, vadsegment in zip(restored_data, vadsegments):
+        text = re.sub(r"<\|[^|]*\|>", "", str(result.get("text", ""))).strip()
+        if not text:
+            continue
+
+        timestamps = []
+        raw_timestamps = result.get("timestamp")
+        if raw_timestamps is None:
+            raw_timestamps = result.get("timestamps", [])
+        for item in raw_timestamps or []:
+            if isinstance(item, dict):
+                start = item.get("start_time")
+                end = item.get("end_time")
+                if start is None or end is None:
+                    continue
+                timestamps.append([int(float(start) * 1000), int(float(end) * 1000)])
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                timestamps.append([int(item[0]), int(item[1])])
+
+        start = timestamps[0][0] if timestamps else vadsegment[0]
+        end = timestamps[-1][1] if timestamps else vadsegment[1]
+        sentences.append(
+            {
+                "start": start,
+                "end": end,
+                "text": text,
+                "sentence": text,
+                "timestamp": timestamps,
+            }
+        )
+    return sentences
+
+
+def _get_punc_tokens(text, punc_array, punc_model):
+    """Return the surface tokens represented by a CT-Transformer punctuation array."""
+    try:
+        from funasr.models.ct_transformer.utils import split_words
+
+        tokens = split_words(
+            text,
+            jieba_usr_dict=getattr(punc_model, "jieba_usr_dict", None),
+        )
+    except Exception:
+        return None
+
+    expanded_tokens = []
+    for token in tokens:
+        if token and "\u0e00" <= token[0] <= "\u9fa5" and len(token) > 1:
+            expanded_tokens.extend(token)
+        else:
+            expanded_tokens.append(token)
+    try:
+        punc_length = len(punc_array)
+    except TypeError:
+        return None
+    if len(expanded_tokens) != punc_length:
+        return None
+    return expanded_tokens
+
+
+def _punctuate_surface_text(text, punc_array, punc_model):
+    """Insert predicted punctuation without changing the ASR surface text."""
+    tokens = _get_punc_tokens(text, punc_array, punc_model)
+    if tokens is None:
+        return None
+
+    spans = _surface_token_spans(text, tokens)
+    if spans is None:
+        return None
+
+    parts = []
+    cursor = 0
+    for token, punc_id, (_, end) in zip(tokens, punc_array, spans):
+        parts.append(text[cursor:end])
+        parts.append(_punc_symbol(punc_id, token, punc_model))
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def _punc_symbol(punc_id, token, punc_model):
+    """Return the punctuation character represented by a model punctuation ID."""
+    punc_list = getattr(punc_model, "punc_list", None)
+    fallback_punc = {1: "", 2: "，", 3: "。", 4: "？", 5: "、"}
+    punc_id = int(punc_id)
+    try:
+        punctuation = punc_list[punc_id]
+    except (IndexError, TypeError):
+        punctuation = fallback_punc.get(punc_id, "")
+    if punctuation == "_":
+        punctuation = ""
+    if punctuation and token[0].isascii():
+        punctuation = {"，": ",", "。": ".", "？": "?", "、": ","}.get(
+            punctuation, punctuation
+        )
+    return punctuation
+
+
+def _surface_token_spans(text, tokens):
+    """Map punctuation tokens back to exact spans in the original surface text."""
+    spans = []
+    cursor = 0
+    for token in tokens:
+        while cursor < len(text) and text[cursor].isspace():
+            cursor += 1
+        surface_token = text[cursor : cursor + len(token)]
+        if surface_token.casefold() != token.casefold():
+            return None
+        spans.append((cursor, cursor + len(token)))
+        cursor += len(token)
+    if text[cursor:].strip():
+        return None
+    return spans
+
+
+def _merge_timestamp_units(text, words, timestamps, punc_array, punc_model):
+    """Merge timestamp/BPE units to the punctuation model's surface tokens."""
+    expanded_tokens = _get_punc_tokens(text, punc_array, punc_model)
+    if expanded_tokens is None:
+        return None
+
+    def normalize(value):
+        return "".join(value.split()).replace("▁", "").casefold()
+
+    if len(words) != len(timestamps):
+        return None
+
+    aligned_text = ""
+    character_timestamps = []
+    for word, timestamp in zip(words, timestamps):
+        word_text = normalize(word)
+        if (
+            not word_text
+            or not isinstance(timestamp, (list, tuple))
+            or len(timestamp) < 2
+            or timestamp[1] < timestamp[0]
+        ):
+            return None
+        start, end = timestamp[:2]
+        duration = end - start
+        aligned_text += word_text
+        for index in range(len(word_text)):
+            character_timestamps.append(
+                [
+                    start + duration * index // len(word_text),
+                    start + duration * (index + 1) // len(word_text),
+                ]
+            )
+
+    merged_timestamps = []
+    character_index = 0
+    for token in expanded_tokens:
+        token_text = normalize(token)
+        token_end = character_index + len(token_text)
+        if (
+            not token_text
+            or aligned_text[character_index:token_end] != token_text
+            or token_end > len(character_timestamps)
+        ):
+            return None
+        merged_timestamps.append(
+            [
+                character_timestamps[character_index][0],
+                character_timestamps[token_end - 1][1],
+            ]
+        )
+        character_index = token_end
+
+    if character_index != len(character_timestamps):
+        return None
+    return " ".join(expanded_tokens), merged_timestamps
+
+
+def _timestamp_sentences_from_surface(
+    text, timestamps, punc_array, punc_model, return_raw_text=False
+):
+    """Build sentence timestamps while preserving the exact ASR surface text."""
+    tokens = _get_punc_tokens(text, punc_array, punc_model)
+    if tokens is None or len(tokens) != len(timestamps):
+        return None
+    spans = _surface_token_spans(text, tokens)
+    if spans is None:
+        return None
+
+    sentences = []
+    sentence_start = 0
+    for index, (token, punc_id) in enumerate(zip(tokens, punc_array)):
+        punctuation = _punc_symbol(punc_id, token, punc_model)
+        if not punctuation:
+            continue
+        raw_sentence = text[spans[sentence_start][0] : spans[index][1]].strip()
+        sentence = {
+            "text": raw_sentence + punctuation,
+            "start": timestamps[sentence_start][0],
+            "end": timestamps[index][1],
+            "timestamp": timestamps[sentence_start : index + 1],
+        }
+        if return_raw_text:
+            sentence["raw_text"] = raw_sentence
+        sentences.append(sentence)
+        sentence_start = index + 1
+
+    if sentence_start < len(tokens):
+        raw_sentence = text[spans[sentence_start][0] : spans[-1][1]].strip()
+        sentence = {
+            "text": raw_sentence,
+            "start": timestamps[sentence_start][0],
+            "end": timestamps[-1][1],
+            "timestamp": timestamps[sentence_start:],
+        }
+        if return_raw_text:
+            sentence["raw_text"] = raw_sentence
+        sentences.append(sentence)
+    return sentences
+
+
+def _get_import_errors():
+    """Internal: get import errors."""
+    try:
+        import funasr
+    except Exception:
+        return {}
+    get_import_errors = getattr(funasr, "get_import_errors", None)
+    if get_import_errors is not None:
+        return get_import_errors()
+    return dict(getattr(funasr, "_IMPORT_ERRORS", {}))
+
+
+def _format_unregistered_component_error(component_type, component_name, registry):
+    """Internal: format unregistered component error.
+    
+        Args:
+            component_type: TODO.
+            component_name: TODO.
+            registry: TODO.
+        """
+    registered = sorted(registry.keys())
+    preview = ", ".join(registered[:80])
+    if len(registered) > 80:
+        preview += f", ... ({len(registered)} total)"
+    if not preview:
+        preview = "(none)"
+
+    import_errors = _get_import_errors()
+    if import_errors:
+        lines = [
+            f"  - {name}: {error}"
+            for name, error in sorted(import_errors.items())[:50]
+        ]
+        remaining = len(import_errors) - len(lines)
+        if remaining > 0:
+            lines.append(f"  ... {remaining} more import failures hidden")
+        import_error_text = "\n".join(lines)
+    else:
+        import_error_text = "  (none recorded)"
+
+    return (
+        f"{component_type} '{component_name}' is not registered.\n"
+        f"Registered {component_type} keys ({len(registered)}): {preview}\n"
+        "Some modules may have failed to import during auto-registration. "
+        "Set FUNASR_IMPORT_DEBUG=1 to print failures during import, or "
+        "FUNASR_STRICT_IMPORT=1 to fail fast.\n"
+        f"Recorded import failures:\n{import_error_text}"
+    )
+
 
 try:
     from funasr.models.campplus.utils import sv_chunk, postprocess, distribute_spk
@@ -127,6 +418,35 @@ def prepare_data_iterator(data_in, input_len=None, data_type=None, key=None):
 class AutoModel:
 
     def __init__(self, **kwargs):
+        """Initialize AutoModel with ASR model and optional sub-models.
+
+        Args:
+            model (str): Model name (hub alias or full ID) or local path.
+            device (str): Device for inference. "cuda:0", "cpu", "mps", "npu:0".
+                Falls back to CPU if specified device is unavailable.
+            vad_model (str, optional): VAD model for long audio segmentation.
+                Enables processing of any-length audio.
+            vad_kwargs (dict, optional): VAD config, e.g. {"max_single_segment_time": 60000}.
+            punc_model (str, optional): Punctuation restoration model.
+                Not needed for Fun-ASR-Nano/SenseVoice/Qwen3-ASR (they output punctuation natively).
+            spk_model (str, optional): Speaker model for diarization ("cam++" or full model ID).
+                Requires vad_model. For Qwen3-ASR, also requires forced_aligner.
+            spk_mode (str, optional): Speaker diarization mode. "punc_segment" (default) or "vad_segment".
+            hub (str): Model hub. "ms" (ModelScope, default) or "hf" (HuggingFace).
+            ncpu (int): CPU threads (default: 4).
+            disable_update (bool): Skip version check on startup.
+            disable_pbar (bool): Disable tqdm progress bars.
+            **kwargs: Additional model-specific parameters (passed to config.yaml overrides).
+
+        Examples:
+            >>> model = AutoModel(model="paraformer-zh", vad_model="fsmn-vad", punc_model="ct-punc")
+            >>> model = AutoModel(model="FunAudioLLM/Fun-ASR-Nano-2512", trust_remote_code=True,
+            ...                   remote_code="./model.py", vad_model="fsmn-vad", spk_model="cam++", hub="hf")
+        """
+        if "vda_model" in kwargs:
+            raise TypeError(
+                "`vda_model` is not a valid AutoModel argument; use `vad_model` to enable voice activity detection."
+            )
 
         try:
             from funasr.utils.version_checker import check_for_update
@@ -149,6 +469,8 @@ class AutoModel:
             vad_kwargs["model_revision"] = kwargs.get("vad_model_revision", "master")
             vad_kwargs["device"] = kwargs["device"]
             vad_kwargs.setdefault("ncpu", kwargs.get("ncpu", 4))
+            if "hub" in kwargs:
+                vad_kwargs.setdefault("hub", kwargs["hub"])
             vad_model, vad_kwargs = self.build_model(**vad_kwargs)
 
         # if punc_model is not None, build punc model else None
@@ -160,6 +482,8 @@ class AutoModel:
             punc_kwargs["model_revision"] = kwargs.get("punc_model_revision", "master")
             punc_kwargs["device"] = kwargs["device"]
             punc_kwargs.setdefault("ncpu", kwargs.get("ncpu", 4))
+            if "hub" in kwargs:
+                punc_kwargs.setdefault("hub", kwargs["hub"])
             punc_model, punc_kwargs = self.build_model(**punc_kwargs)
 
         # if spk_model is not None, build spk model else None
@@ -174,6 +498,8 @@ class AutoModel:
             spk_kwargs["model_revision"] = kwargs.get("spk_model_revision", "master")
             spk_kwargs["device"] = kwargs["device"]
             spk_kwargs.setdefault("ncpu", kwargs.get("ncpu", 4))
+            if "hub" in kwargs:
+                spk_kwargs.setdefault("hub", kwargs["hub"])
             spk_model, spk_kwargs = self.build_model(**spk_kwargs)
             self.cb_model = ClusterBackend(**cb_kwargs).to(kwargs["device"])
             spk_mode = kwargs.get("spk_mode", "punc_segment")
@@ -194,7 +520,34 @@ class AutoModel:
 
     @staticmethod
     def build_model(**kwargs):
+        """Download model from hub, build all components, and load pretrained weights.
+
+        This method handles the full model construction pipeline:
+        1. Download model files from ModelScope/HuggingFace (if not local)
+        2. Parse config.yaml to determine model class, tokenizer, frontend
+        3. Instantiate tokenizer, frontend, and model via the registry
+        4. Load pretrained weights from model.pt
+
+        Args:
+            **kwargs: Must include 'model' (str). All other config.yaml fields can be overridden.
+
+        Returns:
+            tuple: (model, kwargs) where model is the instantiated nn.Module and
+                kwargs contains the resolved configuration.
+        """
         assert "model" in kwargs
+        # Silero VAD is loaded by its optional Python package rather than a
+        # FunASR model repository. Supplying model_conf keeps it on the normal
+        # AutoModel construction path while bypassing hub config resolution.
+        if kwargs["model"] in {"silero-vad", "silero_vad"}:
+            kwargs.setdefault("model_conf", {})
+            kwargs["model"] = "SileroVad"
+        if kwargs["model"] in {
+            "MOSS-Transcribe-Diarize",
+            "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+        }:
+            kwargs.setdefault("model_conf", {})
+            kwargs.setdefault("model_path", kwargs["model"])
         if "model_conf" not in kwargs:
             logging.info("download models from model hub: {}".format(kwargs.get("hub", "ms")))
             kwargs = download_model(**kwargs)
@@ -202,11 +555,13 @@ class AutoModel:
         set_all_random_seed(kwargs.get("seed", 0))
 
         device = kwargs.get("device", "cuda")
-        if ((device =="cuda" and not torch.cuda.is_available())
-            or (device == "xpu" and not torch.xpu.is_available())
-            or (device == "mps" and not torch.backends.mps.is_available())
-            or (device == "npu" and not is_npu_available())
-            or kwargs.get("ngpu", 1) == 0):
+        if (
+            (device.startswith("cuda") and not torch.cuda.is_available())
+            or (device.startswith("xpu") and not torch.xpu.is_available())
+            or (device.startswith("mps") and not torch.backends.mps.is_available())
+            or (device.startswith("npu") and not is_npu_available())
+            or kwargs.get("ngpu", 1) == 0
+        ):
             device = "cpu"
             kwargs["batch_size"] = 1
         kwargs["device"] = device
@@ -285,7 +640,12 @@ class AutoModel:
         kwargs["frontend"] = frontend
         # build model
         model_class = tables.model_classes.get(kwargs["model"])
-        assert model_class is not None, f'{kwargs["model"]} is not registered'
+        if model_class is None:
+            raise RuntimeError(
+                _format_unregistered_component_error(
+                    "model", kwargs["model"], tables.model_classes
+                )
+            )
         model_conf = {}
         deep_update(model_conf, kwargs.get("model_conf", {}))
         deep_update(model_conf, kwargs)
@@ -313,6 +673,7 @@ class AutoModel:
         elif kwargs.get("bf16", False):
             model.to(torch.bfloat16)
         model.to(device)
+        model.eval()
 
         if not kwargs.get("disable_log", True):
             tables.print()
@@ -320,12 +681,56 @@ class AutoModel:
         return model, kwargs
 
     def __call__(self, *args, **cfg):
+        """Internal: call  .
+        
+            Args:
+                *args: Variable positional arguments.
+                **cfg: Configuration overrides.
+            """
         kwargs = self.kwargs
         deep_update(kwargs, cfg)
         res = self.model(*args, kwargs)
         return res
 
     def generate(self, input, input_len=None, progress_callback=None, **cfg):
+        """Run speech recognition on input audio.
+
+        This is the primary user-facing method. It automatically routes to:
+        - inference() if no vad_model is configured (single utterance)
+        - inference_with_vad() if vad_model is configured (long audio with segmentation)
+
+        Args:
+            input: Audio input. Accepts:
+                - File path (str): "audio.wav", "audio.mp3"
+                - URL (str): "https://..."
+                - numpy array: raw audio samples (float32, 16kHz)
+                - list: batch of file paths or arrays
+                - bytes: raw audio bytes
+            input_len (tensor, optional): Length of each input sample.
+            progress_callback (callable, optional): fn(current, total) called during processing.
+            **cfg: Runtime parameters:
+                - cache (dict): State cache for streaming mode. Pass {} for first call.
+                - hotword (str/list): Keywords to boost recognition accuracy.
+                - postprocess_hotwords (str/list/dict): Text-level hotword correction after
+                  decoding. Unlike model-level ``hotword``, this runs on the final text.
+                - postprocess_hotword_file (str): Hotword file path. Each line is a target
+                  word or an explicit mapping like ``错误词=>目标词``.
+                - postprocess_hotword_threshold (float): Fuzzy match threshold in [0, 1].
+                - return_postprocess_hotword_matches (bool): Include replacement details.
+                - language (str): Language hint ("auto", "zh", "en", "Chinese", etc.)
+                - batch_size_s (int): Dynamic batch total duration in seconds.
+                - is_final (bool): Last chunk flag for streaming mode.
+                - return_spk_res (bool): Return speaker diarization results.
+                - sentence_timestamp (bool): Return sentence-level timestamps.
+                - use_itn (bool): Apply inverse text normalization (SenseVoice).
+
+        Returns:
+            list[dict]: Results for each input sample. Common fields:
+                - "key" (str): Sample identifier
+                - "text" (str): Recognized text
+                - "timestamp" (list): [[start_ms, end_ms], ...] per character/word
+                - "sentence_info" (list): [{text, start, end, spk, timestamp}, ...] when spk enabled
+        """
         self._reset_runtime_configs()
         if self.vad_model is None:
             results = self.inference(
@@ -340,12 +745,13 @@ class AutoModel:
                     if cfg.get("return_raw_text", self.kwargs.get("return_raw_text", False)):
                         result["raw_text"] = copy.copy(result["text"])
                     result["text"] = punc_res[0]["text"]
-            return results
+            return apply_postprocess_hotwords_to_results(results, cfg)
 
         else:
-            return self.inference_with_vad(
+            results = self.inference_with_vad(
                 input, input_len=input_len, progress_callback=progress_callback, **cfg
             )
+            return apply_postprocess_hotwords_to_results(results, cfg)
 
     def inference(
         self,
@@ -357,6 +763,23 @@ class AutoModel:
         progress_callback=None,
         **cfg,
     ):
+        """Run model inference on input data (internal method).
+
+        Handles batching, timing, and progress reporting. Called by generate()
+        and inference_with_vad(). Typically not called directly by users.
+
+        Args:
+            input: Audio data, file path, or text (for punc model).
+            input_len (tensor, optional): Input lengths for batch.
+            model (nn.Module, optional): Override model (used for VAD/PUNC/SPK sub-models).
+            kwargs (dict, optional): Override kwargs (used for sub-model configs).
+            key (list, optional): Sample identifiers.
+            progress_callback (callable, optional): Progress reporting function.
+            **cfg: Additional config merged into kwargs.
+
+        Returns:
+            list[dict]: Model inference results.
+        """
         if kwargs is None:
             self._reset_runtime_configs()
         kwargs = self.kwargs if kwargs is None else kwargs
@@ -364,7 +787,6 @@ class AutoModel:
             kwargs.pop("cache")
         deep_update(kwargs, cfg)
         model = self.model if model is None else model
-        model.eval()
 
         batch_size = kwargs.get("batch_size", 1)
         # if kwargs.get("device", "cpu") == "cpu":
@@ -434,7 +856,27 @@ class AutoModel:
         return asr_result_list
 
     def inference_with_vad(self, input, input_len=None, **cfg):
+        """Run ASR with VAD segmentation, punctuation, and optional speaker diarization.
+
+        Pipeline:
+        1. VAD: Segment audio into speech regions
+        2. ASR: Recognize each segment (sorted by length for efficient batching)
+        3. Timestamp merge: Combine per-segment timestamps with VAD offsets
+        4. Punctuation: Add punctuation to combined text (if punc_model configured)
+        5. Speaker diarization: Cluster speaker embeddings and assign labels (if spk_model configured)
+
+        Args:
+            input: Audio file path, URL, or numpy array.
+            input_len: Not used (kept for interface consistency).
+            **cfg: Runtime parameters (same as generate()).
+
+        Returns:
+            list[dict]: Results with fields: key, text, timestamp, sentence_info, raw_text.
+        """
         self._reset_runtime_configs()
+        if self.spk_model is not None and "output_timestamp" not in cfg:
+            cfg["output_timestamp"] = True
+            cfg["return_time_stamps"] = True
         kwargs = self.kwargs
         # step.1: compute the vad model
         deep_update(self.vad_kwargs, cfg)
@@ -539,7 +981,8 @@ class AutoModel:
                         spk_res = self.inference(
                             speech_b, input_len=None, model=self.spk_model, kwargs=kwargs, **cfg
                         )
-                        results[_b]["spk_embedding"] = spk_res[0]["spk_embedding"]
+                        spk_embs = torch.cat([r["spk_embedding"] for r in spk_res], dim=0)
+                        results[_b]["spk_embedding"] = spk_embs
                 beg_idx = end_idx
                 end_idx += 1
                 max_len_in_batch = sample_length
@@ -573,8 +1016,12 @@ class AutoModel:
                             result[k] = []
                         for t in restored_data[j][k]:
                             if isinstance(t, dict):
-                                t["start_time"] = (float(t["start_time"]) * 1000 + int(vadsegments[j][0])) / 1000
-                                t["end_time"] = (float(t["end_time"]) * 1000 + int(vadsegments[j][0])) / 1000
+                                t["start_time"] = (
+                                    float(t["start_time"]) * 1000 + int(vadsegments[j][0])
+                                ) / 1000
+                                t["end_time"] = (
+                                    float(t["end_time"]) * 1000 + int(vadsegments[j][0])
+                                ) / 1000
                             else:
                                 t[0] = int(t[0]) + int(vadsegments[j][0])
                                 t[1] = int(t[1]) + int(vadsegments[j][0])
@@ -595,24 +1042,95 @@ class AutoModel:
                         else:
                             result[k] += restored_data[j][k]
 
+            # Convert dict-format timestamps (Fun-ASR-Nano) to list-format for downstream compatibility
+            if "timestamps" in result and "timestamp" not in result:
+                result["timestamp"] = [
+                    [int(t["start_time"] * 1000), int(t["end_time"] * 1000)]
+                    for t in result["timestamps"]
+                ]
+
             if not len(result["text"].strip()):
                 continue
             return_raw_text = kwargs.get("return_raw_text", False)
+            aligned_words = result.get("words")
+            aligned_timestamps = result.get("timestamp")
+            aligned_word_text = None
+            if (
+                isinstance(aligned_words, list)
+                and aligned_words
+                and all(isinstance(word, str) and word.strip() for word in aligned_words)
+                and isinstance(aligned_timestamps, list)
+                and len(aligned_words) == len(aligned_timestamps)
+            ):
+                aligned_word_text = " ".join(aligned_words)
+
             # step.3 compute punc model
             raw_text = None
-            if self.punc_model is not None:
+            punc_input_text = None
+            punc_res = None
+            punc_array = None
+            if self.punc_model is not None and "timestamps" not in result:
                 deep_update(self.punc_kwargs, cfg)
-                punc_res = self.inference(
-                    result["text"], model=self.punc_model, kwargs=self.punc_kwargs, **cfg
-                )
                 raw_text = copy.copy(result["text"])
+                punc_input_text = _join_vad_texts(
+                    item.get("text", "") for item in restored_data
+                )
+                punc_res = self.inference(
+                    punc_input_text,
+                    model=self.punc_model,
+                    kwargs=self.punc_kwargs,
+                    **cfg,
+                )
                 if return_raw_text:
                     result["raw_text"] = raw_text
-                result["text"] = punc_res[0]["text"]
+                punc_array = punc_res[0].get("punc_array")
+                punctuated_surface = None
+                if aligned_word_text is not None:
+                    punctuated_surface = _punctuate_surface_text(
+                        punc_input_text, punc_array, self.punc_model
+                    )
+                result["text"] = punctuated_surface or punc_res[0]["text"]
+
+            timestamp_text = punc_input_text
+            sentence_timestamps = result.get("timestamp", [])
+            punc_alignment_failed = False
+            if punc_res is not None:
+                try:
+                    punc_length = len(punc_array)
+                except TypeError:
+                    punc_length = -1
+                    punc_array = None
+                if aligned_word_text is not None and punc_length == len(aligned_words):
+                    timestamp_text = aligned_word_text
+                elif aligned_word_text is not None and punc_length > 0:
+                    merged_units = _merge_timestamp_units(
+                        punc_input_text,
+                        aligned_words,
+                        aligned_timestamps,
+                        punc_array,
+                        self.punc_model,
+                    )
+                    if merged_units is not None:
+                        timestamp_text, sentence_timestamps = merged_units
+                if punc_array is not None and punc_length != len(sentence_timestamps):
+                    punc_array = None
+                    punc_alignment_failed = True
+            surface_sentence_list = None
+            if aligned_word_text is not None and punc_array is not None:
+                surface_sentence_list = _timestamp_sentences_from_surface(
+                    punc_input_text,
+                    sentence_timestamps,
+                    punc_array,
+                    self.punc_model,
+                    return_raw_text=return_raw_text,
+                )
 
             # speaker embedding cluster after resorted
             if self.spk_model is not None and kwargs.get("return_spk_res", True):
-                if raw_text is None:
+                if raw_text is None and self.spk_mode == "punc_segment":
+                    logging.warning("punc_model is missing, falling back to vad_segment mode for speaker diarization.")
+                    self.spk_mode = "vad_segment"
+                elif raw_text is None:
                     logging.error("Missing punc_model, which is required by spk_model.")
                 all_segments = sorted(all_segments, key=lambda x: x[0])
                 spk_embedding = result["spk_embedding"]
@@ -620,22 +1138,41 @@ class AutoModel:
                     spk_embedding.cpu(), oracle_num=kwargs.get("preset_spk_num", None)
                 )
                 # del result['spk_embedding']
-                sv_output = postprocess(all_segments, None, labels, spk_embedding.cpu())
+                # postprocess expects np.ndarray embeddings (per its type hint).
+                spk_embedding_np = spk_embedding.detach().cpu().numpy()
+                if kwargs.get("return_spk_center", False):
+                    sv_output, spk_center = postprocess(
+                        all_segments, None, labels, spk_embedding_np, return_spk_center=True
+                    )
+                    # Per-speaker ERes2NetV2 centroids, indexed by the `spk` id in
+                    # sentence_info. Kept on the result for downstream voiceprint use
+                    # (the per-chunk spk_embedding below is still deleted to keep output small).
+                    result["spk_embedding_center"] = spk_center
+                else:
+                    sv_output = postprocess(all_segments, None, labels, spk_embedding_np)
+                if self.spk_mode == "punc_segment" and "timestamp" not in result and "timestamps" not in result:
+                    logging.warning("No timestamps in ASR result (e.g. SenseVoice), falling back to vad_segment mode for speaker diarization.")
+                    self.spk_mode = "vad_segment"
                 if self.spk_mode == "vad_segment":  # recover sentence_list
                     sentence_list = []
                     for rest, vadsegment in zip(restored_data, vadsegments):
-                        if "timestamp" not in rest:
-                            logging.error(
-                                "Only 'iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch' \
-                                           and 'iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch'\
-                                           can predict timestamp, and speaker diarization relies on timestamps."
-                            )
+                        if "timestamp" in rest:
+                            ts = rest["timestamp"]
+                        elif "timestamps" in rest:
+                            ts = [
+                                [int(t["start_time"] * 1000), int(t["end_time"] * 1000)]
+                                for t in rest["timestamps"]
+                            ]
+                        else:
+                            logging.error("No timestamp found in ASR result. Speaker diarization relies on timestamps.")
+                            ts = []
                         sentence_list.append(
                             {
                                 "start": vadsegment[0],
                                 "end": vadsegment[1],
+                                "text": rest["text"],
                                 "sentence": rest["text"],
-                                "timestamp": rest["timestamp"],
+                                "timestamp": ts,
                             }
                         )
                 elif self.spk_mode == "punc_segment":
@@ -645,18 +1182,25 @@ class AutoModel:
                                        and 'iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch'\
                                        can predict timestamp, and speaker diarization relies on timestamps."
                         )
-                    if kwargs.get("en_post_proc", False):
+                    if punc_res is None:
+                        logging.error(
+                            "Missing punc_model, which is required for punc_segment speaker diarization."
+                        )
+                        sentence_list = []
+                    elif surface_sentence_list is not None:
+                        sentence_list = surface_sentence_list
+                    elif kwargs.get("en_post_proc", False):
                         sentence_list = timestamp_sentence_en(
-                            punc_res[0]["punc_array"],
-                            result["timestamp"],
-                            raw_text,
+                            punc_array,
+                            sentence_timestamps,
+                            timestamp_text,
                             return_raw_text=return_raw_text,
                         )
                     else:
                         sentence_list = timestamp_sentence(
-                            punc_res[0]["punc_array"],
-                            result["timestamp"],
-                            raw_text,
+                            punc_array,
+                            sentence_timestamps,
+                            timestamp_text,
                             return_raw_text=return_raw_text,
                         )
                 distribute_spk(sentence_list, sv_output)
@@ -664,19 +1208,33 @@ class AutoModel:
             elif kwargs.get("sentence_timestamp", False):
                 if not len(result["text"].strip()):
                     sentence_list = []
+                elif self.punc_model is None and punc_res is None and not sentence_timestamps:
+                    sentence_list = _vad_segment_sentences(restored_data, vadsegments)
+                elif punc_res is None:
+                    logging.warning(
+                        "punc_model is required for sentence_timestamp, skipping sentence segmentation."
+                    )
+                    sentence_list = []
+                elif punc_alignment_failed:
+                    logging.warning(
+                        "punctuation timestamps could not be aligned, falling back to VAD segments."
+                    )
+                    sentence_list = _vad_segment_sentences(restored_data, vadsegments)
+                elif surface_sentence_list is not None:
+                    sentence_list = surface_sentence_list
                 else:
                     if kwargs.get("en_post_proc", False):
                         sentence_list = timestamp_sentence_en(
-                            punc_res[0]["punc_array"],
-                            result["timestamp"],
-                            raw_text,
+                            punc_array,
+                            sentence_timestamps,
+                            timestamp_text,
                             return_raw_text=return_raw_text,
                         )
                     else:
                         sentence_list = timestamp_sentence(
-                            punc_res[0]["punc_array"],
-                            result["timestamp"],
-                            raw_text,
+                            punc_array,
+                            sentence_timestamps,
+                            timestamp_text,
                             return_raw_text=return_raw_text,
                         )
                 result["sentence_info"] = sentence_list
@@ -703,6 +1261,21 @@ class AutoModel:
         return results_ret_list
 
     def export(self, input=None, **cfg):
+        """Export model to ONNX format.
+
+        Creates a deep copy of the model to isolate ONNX operator monkey-patching,
+        then runs torch.onnx.export. The original model remains usable after export.
+
+        Args:
+            input: Sample input for tracing (auto-generated if None).
+            **cfg: Export parameters:
+                - type (str): Export format, "onnx" (default).
+                - quantize (bool): Whether to quantize the model.
+                - device (str): Device for export.
+
+        Returns:
+            str: Path to the exported model directory.
+        """
         """
 
         :param input:
@@ -716,11 +1289,23 @@ class AutoModel:
         """
 
         device = cfg.get("device", "cpu")
-        model = self.model.to(device=device)
-        kwargs = self.kwargs
+        
+        # 对模型进行深拷贝，隔离 ONNX 算子替换（Monkey-patching）对原模型的破坏
+        # Implement deep copy of the model to isolate ONNX operator monkey-patching 
+        # and prevent corruption of the original model
+        model = copy.deepcopy(self.model).to(device=device)
+        
+        # 对配置参数进行深拷贝，隔离 deep_update 和 del 的引用污染
+        # Implement deep copy of configuration parameters to isolate reference pollution caused by deep_update and del.
+        kwargs = copy.deepcopy(self.kwargs)
+        
         deep_update(kwargs, cfg)
         kwargs["device"] = device
-        del kwargs["model"]
+        
+        # Safely delete keys that may cause issues during export
+        if "model" in kwargs:
+            del kwargs["model"]
+            
         model.eval()
 
         type = kwargs.get("type", "onnx")
@@ -730,6 +1315,9 @@ class AutoModel:
         )
 
         with torch.no_grad():
+            # 这里的导出操作只会魔改 model 副本，原实例的 self.model 依然是纯洁的 PyTorch 图
+            # This export operation only mutates the model copy; 
+            # the original self.model instance remains an intact PyTorch graph.
             export_dir = export_utils.export(model=model, data_in=data_list, **kwargs)
 
         return export_dir
@@ -747,6 +1335,10 @@ class AutoModel:
         baseline["kwargs"] = copy.deepcopy(self.kwargs)
         self._base_kwargs_map = baseline
 
+    _IMMUTABLE_KWARGS_KEYS = frozenset([
+        "token_list", "tokenizer", "frontend", "model", "init_param", "model_path",
+    ])
+
     def _reset_runtime_configs(self):
         """Ensure runtime kwargs reset to baseline defaults before inference."""
         base_map = getattr(self, "_base_kwargs_map", None)
@@ -754,7 +1346,12 @@ class AutoModel:
             return
 
         for name, base in base_map.items():
-            restored = copy.deepcopy(base)
+            restored = {}
+            for k, v in base.items():
+                if k in self._IMMUTABLE_KWARGS_KEYS or not isinstance(v, (dict, list)):
+                    restored[k] = v
+                else:
+                    restored[k] = copy.deepcopy(v)
             setattr(self, name, restored)
 
         ncpu = _resolve_ncpu(self.kwargs, 4)

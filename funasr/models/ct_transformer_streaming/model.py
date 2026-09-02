@@ -16,20 +16,33 @@ from funasr.models.ct_transformer.utils import split_to_mini_sentence, split_wor
 
 
 if LooseVersion(torch.__version__) >= LooseVersion("1.6.0"):
-    from torch.cuda.amp import autocast
+    from funasr.utils.amp import autocast
 else:
     # Nothing to do if torch<1.6.0
     @contextmanager
     def autocast(enabled=True):
+        """Autocast.
+        
+            Args:
+                enabled: TODO.
+            """
         yield
 
 
 @tables.register("model_classes", "CTTransformerStreaming")
 class CTTransformerStreaming(CTTransformer):
-    """
+    """CT-Transformer Streaming: Online punctuation restoration.
+
+    Processes text incrementally with a sliding window, maintaining cache
+    of previous context for consistent punctuation decisions across chunks.
+    Used as punc_model in streaming ASR pipelines.
+
+    Supports VAD-aware punctuation: uses VAD boundaries to improve sentence segmentation.
+
+    Reference: https://arxiv.org/pdf/2003.01309.pdf
+    Output: {"key": str, "text": str, "punc_array": Tensor}
+
     Author: Speech Lab of DAMO Academy, Alibaba Group
-    CT-Transformer: Controllable time-delay transformer for real-time punctuation prediction and disfluency detection
-    https://arxiv.org/pdf/2003.01309.pdf
     """
 
     def __init__(
@@ -37,6 +50,12 @@ class CTTransformerStreaming(CTTransformer):
         *args,
         **kwargs,
     ):
+        """Initialize CTTransformerStreaming.
+        
+            Args:
+                *args: Variable positional arguments.
+                **kwargs: Additional keyword arguments.
+            """
         super().__init__(*args, **kwargs)
 
     def punc_forward(
@@ -56,6 +75,7 @@ class CTTransformerStreaming(CTTransformer):
         return y, None
 
     def with_vad(self):
+        """With vad."""
         return True
 
     def inference(
@@ -65,9 +85,22 @@ class CTTransformerStreaming(CTTransformer):
         key: list = None,
         tokenizer=None,
         frontend=None,
-        cache: dict = {},
+        cache: dict = None,
         **kwargs,
     ):
+        """Run inference on input data.
+        
+            Args:
+                data_in: Input data (audio samples, file paths, or text).
+                data_lengths: Lengths of each input sample in the batch.
+                key: Sample identifiers.
+                tokenizer: Tokenizer instance for text encoding/decoding.
+                frontend: Audio frontend for feature extraction.
+                cache: State cache dict for streaming inference.
+                **kwargs: Additional keyword arguments.
+            """
+        if cache is None:
+            cache = {}
         assert len(data_in) == 1
 
         if len(cache) == 0:
@@ -187,6 +220,11 @@ class CTTransformerStreaming(CTTransformer):
 
     def export(self, **kwargs):
 
+        """Export.
+        
+            Args:
+                **kwargs: Additional keyword arguments.
+            """
         from .export_meta import export_rebuild_model
 
         models = export_rebuild_model(model=self, **kwargs)

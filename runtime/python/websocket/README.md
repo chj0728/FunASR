@@ -10,7 +10,7 @@ This is a demo using funasr pipeline with websocket python-api. It supports the 
 pip install -U modelscope funasr
 # For the users in China, you could install with the command:
 # pip install -U modelscope funasr -i https://mirror.sjtu.edu.cn/pypi/web/simple
-git clone https://github.com/alibaba/FunASR.git && cd FunASR
+git clone https://github.com/modelscope/FunASR.git && cd FunASR
 ```
 
 ### Install the requirements for server
@@ -43,7 +43,7 @@ python funasr_wss_server.py --port 10095
 
 Install the requirements for client
 ```shell
-git clone https://github.com/alibaba/FunASR.git && cd FunASR
+git clone https://github.com/modelscope/FunASR.git && cd FunASR
 cd funasr/runtime/python/websocket
 pip install -r requirements_client.txt
 ```
@@ -68,8 +68,11 @@ python funasr_wss_client.py \
 --audio_in [if set, loadding from wav.scp, else recording from mircrophone] \
 --output_dir [if set, write the results to output_dir] \
 --mode [`online` for streaming asr, `offline` for non-streaming, `2pass` for unifying streaming and non-streaming asr] \
---thread_num [thread_num for send data]
+--thread_num [thread_num for send data] \
+--result_timeout [seconds to wait for the final server acknowledgement]
 ```
+
+When `--audio_in` is set, the client sends `{"is_speaking": false, "is_end": true}` after the last audio frame. The server flushes pending online and offline inference before replying with `{"is_end": true, "is_final": true}`. If inference fails, the acknowledgement contains `{"is_end": true, "is_final": false, "error": "..."}`. The client waits up to `--result_timeout` seconds for this acknowledgement; the default is 300 seconds.
 
 #### Usage examples
 ##### ASR offline client
@@ -122,6 +125,6 @@ print("text",text)
 ```
 
 ## Acknowledge
-1. This project is maintained by [FunASR community](https://github.com/alibaba-damo-academy/FunASR).
+1. This project is maintained by [FunASR community](https://github.com/modelscope/FunASR).
 2. We acknowledge [zhaoming](https://github.com/zhaomingwork/FunASR/tree/fix_bug_for_python_websocket) for contributing the websocket service.
 3. We acknowledge [cgisky1980](https://github.com/cgisky1980/FunASR) for contributing the websocket service of offline model.

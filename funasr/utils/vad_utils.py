@@ -3,6 +3,13 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 def slice_padding_fbank(speech, speech_lengths, vad_segments):
+    """Slice padding fbank.
+    
+        Args:
+            speech: Speech audio tensor, shape (batch, time).
+            speech_lengths: Length of each speech sample.
+            vad_segments: TODO.
+        """
     speech_list = []
     speech_lengths_list = []
     for i, segment in enumerate(vad_segments):
@@ -19,6 +26,18 @@ def slice_padding_fbank(speech, speech_lengths, vad_segments):
 
 
 def slice_padding_audio_samples(speech, speech_lengths, vad_segments):
+
+    """Slice audio into VAD segments with proper padding.
+
+    Args:
+        speech (Tensor): Full audio tensor.
+        speech_lengths (int): Total audio length.
+        vad_segments (list): List of (segment_info, original_index) tuples,
+            where segment_info is [start_ms, end_ms].
+
+    Returns:
+        tuple: (speech_list, speech_lengths_list) - lists of numpy arrays and their lengths.
+    """
     speech_list = []
     speech_lengths_list = []
     for i, segment in enumerate(vad_segments):
@@ -33,6 +52,17 @@ def slice_padding_audio_samples(speech, speech_lengths, vad_segments):
 
 
 def merge_vad(vad_result, max_length=15000, min_length=0):
+
+    """Merge short VAD segments to reduce fragmentation.
+
+    Args:
+        vad_result (list): VAD segments [[start_ms, end_ms], ...].
+        max_length (int): Maximum merged segment length in ms (default 15000).
+        min_length (int): Minimum segment length; shorter ones get merged (default 0).
+
+    Returns:
+        list: Merged VAD segments [[start_ms, end_ms], ...].
+    """
     new_result = []
     if len(vad_result) <= 1:
         return vad_result
